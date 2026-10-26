@@ -419,6 +419,16 @@ test('admin mobile preview hides copy text at the same card density as the real 
   assert.equal(shouldHideCopyText('desktop', '5'), true);
 });
 
+test('horizontal category menu carries password protection state for client verification', () => {
+  const html = renderHorizontalMenu([
+    { id: 11, catelog: 'Locked', password_protected: 1, children: [
+      { id: 12, catelog: 'Nested Locked', password_protected: 1, children: [] }
+    ] }
+  ], null);
+  assert.match(html, /data-id="11" data-protected="1"/);
+  assert.match(html, /data-id="12" data-protected="1"/);
+});
+
 test('menu renderers escape names and use category IDs in URLs', () => {
   const categories = [
     {

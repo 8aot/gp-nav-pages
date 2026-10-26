@@ -2186,3 +2186,69 @@ body.friend-links-modal-open { overflow: hidden; }
   .friend-links-grid { height: calc(100% - 54px); padding: 18px 14px; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 10px; }
   .friend-link-card { min-height: 80px; }
 }
+
+/* 2026-10-27 导航页布局修正：保持壁纸完整透出，页脚内容整体居中 */
+#app-scroll > .main-content > section > div,
+#app-scroll > .main-content > section .max-w-7xl,
+#app-scroll > .main-content > section .container,
+#app-scroll > .main-content > section .bg-white,
+#app-scroll > .main-content > section .dark\:bg-gray-900 {
+  background-color: transparent !important;
+  background-image: none !important;
+  box-shadow: none;
+}
+
+#app-scroll > .main-content > footer.nav-footer {
+  background: transparent !important;
+  border-top: 0 !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  padding: 14px 16px 20px;
+  color: rgba(255,255,255,.95) !important;
+}
+.nav-footer-inner {
+  justify-content: center !important;
+  align-items: center !important;
+  flex-direction: row !important;
+  flex-wrap: wrap;
+  gap: 12px 24px !important;
+  text-align: center;
+}
+.nav-friend-links {
+  justify-content: center !important;
+  align-items: center !important;
+  width: auto;
+}
+.nav-friend-title {
+  color: rgba(255,255,255,.96) !important;
+  margin: 0 !important;
+  font-size: 14px !important;
+}
+.nav-footer-copyright {
+  color: rgba(255,255,255,.96) !important;
+  white-space: normal !important;
+  margin: 0 !important;
+  text-align: center !important;
+}
+.friend-links-modal {
+  background: rgba(0, 0, 0, .38) !important;
+  backdrop-filter: blur(5px);
+  -webkit-backdrop-filter: blur(5px);
+}
+.friend-links-dialog {
+  background: rgba(225, 229, 232, .20) !important;
+  border-color: rgba(255,255,255,.25) !important;
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+}
+.friend-links-grid {
+  background: rgba(208, 215, 220, .12) !important;
+}
+.friend-link-card {
+  background: rgba(235, 240, 243, .20) !important;
+}
+@media (max-width: 760px) {
+  .nav-footer-inner { flex-direction: row !important; align-items: center !important; }
+  .nav-footer-copyright { white-space: normal !important; }
+}
