@@ -297,7 +297,6 @@ export async function onRequest(context) {
         <label class="search-engine-option active" data-engine="local"><span>站内</span></label>
         <label class="search-engine-option" data-engine="google"><span>Google</span></label>
         <label class="search-engine-option" data-engine="baidu"><span>Baidu</span></label>
-        <label class="search-engine-option" data-engine="github"><span>Github</span></label>
     </div>` : '';
 
   // === 14. Header HTML ===
