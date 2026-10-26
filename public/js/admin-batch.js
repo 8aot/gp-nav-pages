@@ -174,6 +174,14 @@ function fetchBatchData() {
             if (data.code === 200) {
                 batchData = data.data;
                 batchTotalItems = data.total;
+                // 以服务端回传的 pageSize 为准（接口有上限），否则页数算错、后面的条目不可达
+                const serverPageSize = Number(data.pageSize);
+                if (Number.isFinite(serverPageSize) && serverPageSize > 0) {
+                    batchPageSize = serverPageSize;
+                    if (batchPageSizeSelect && [...batchPageSizeSelect.options].some(o => o.value === String(serverPageSize))) {
+                        batchPageSizeSelect.value = String(serverPageSize);
+                    }
+                }
                 renderBatchTable(batchData);
                 
                 batchCurrentPage = data.page; // Use server returned page

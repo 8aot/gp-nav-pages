@@ -1,0 +1,6 @@
+{
+  "version": 1,
+  "description": "静态资源不经过 Pages Functions：省去每个 CSS/JS 请求的一次 Worker 调用，也不计入 Functions 请求配额。/ 与 /admin 等由 Functions 渲染的路径保持在 include 内。",
+  "include": ["/*"],
+  "exclude": ["/css/*", "/js/*", "/favicon.svg"]
+}

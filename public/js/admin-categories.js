@@ -263,6 +263,8 @@ function bindCategoryEvents() {
                 const sortOrder = category.sort_order;
                 document.getElementById('editCategorySortOrder').value = (sortOrder === null || sortOrder === 9999) ? '' : sortOrder;
                 document.getElementById('editCategoryIsPrivate').checked = !!category.is_private;
+                document.getElementById('editCategoryPassword').value = '';
+                document.getElementById('editCategoryRemovePassword').checked = false;
                 
                 if (typeof window.createCascadingDropdown === 'function') {
                     window.createCascadingDropdown('editCategoryParentWrapper', 'editCategoryParent', window.categoriesTree, category.parent_id || '0', category.id);
@@ -301,22 +303,26 @@ function bindCategoryEvents() {
                 const confirmBtn = document.getElementById('confirmDeleteCategoryBtn');
                 const cancelBtn = document.getElementById('cancelDeleteCategoryBtn');
                 const closeBtn = document.getElementById('closeDeleteCategoryConfirmModal');
+
+                const closeModal = () => {
+                     deleteModal.style.display = 'none';
+                     document.body.classList.remove('modal-open');
+                };
                 
                 // 使用 cloneNode 快速清除所有 event listeners
                 const newConfirmBtn = confirmBtn.cloneNode(true);
                 confirmBtn.parentNode.replaceChild(newConfirmBtn, confirmBtn);
                 
                 newConfirmBtn.addEventListener('click', () => {
+                     closeModal();
                      deleteCategory(category_id);
-                     deleteModal.style.display = 'none';
                 });
-                
-                const closeModal = () => {
-                     deleteModal.style.display = 'none';
-                     document.body.classList.remove('modal-open');
-                }
+
                 cancelBtn.onclick = closeModal;
                 closeBtn.onclick = closeModal;
+                deleteModal.onclick = (event) => {
+                     if (event.target === deleteModal) closeModal();
+                };
                 
                 deleteModal.style.display = 'block';
                 document.body.classList.add('modal-open');
@@ -480,6 +486,8 @@ if (editCategoryForm) {
         const sortOrder = document.getElementById('editCategorySortOrder').value.trim();
         const parentId = document.getElementById('editCategoryParent').value;
         const isPrivate = document.getElementById('editCategoryIsPrivate').checked;
+        const categoryPassword = document.getElementById('editCategoryPassword').value;
+        const removePassword = document.getElementById('editCategoryRemovePassword').checked;
 
         if (!categoryName) {
             window.showMessage('分类名称不能为空', 'error');
@@ -496,7 +504,8 @@ if (editCategoryForm) {
         const payload = {
             catelog: categoryName,
             parent_id: parentId,
-            is_private: isPrivate
+            is_private: isPrivate,
+            ...(categoryPassword ? { password: categoryPassword } : {})
         };
 
         if (sortOrder !== '') {
@@ -559,6 +568,7 @@ if (addCategoryForm) {
         const sortOrder = document.getElementById('newCategorySortOrder').value.trim();
         const parentId = document.getElementById('newCategoryParent').value;
         const isPrivate = document.getElementById('newCategoryIsPrivate').checked;
+        const categoryPassword = document.getElementById('newCategoryPassword')?.value || '';
 
         if (!categoryName) {
             window.showMessage('分类名称不能为空', 'error');
@@ -568,7 +578,8 @@ if (addCategoryForm) {
         const payload = {
             catelog: categoryName,
             parent_id: parentId,
-            is_private: isPrivate
+            is_private: isPrivate,
+            ...(categoryPassword ? { password: categoryPassword } : {})
         };
 
         if (sortOrder !== '') {

@@ -7,12 +7,43 @@
 const importBtn = document.getElementById('importBtn');
 const importFile = document.getElementById('importFile');
 const exportBtn = document.getElementById('exportBtn');
+const importSourceModal = document.getElementById('importSourceModal');
+const importFromFileBtn = document.getElementById('importFromFileBtn');
+const importFromLibraryBtn = document.getElementById('importFromLibraryBtn');
+const closeImportSourceModal = document.getElementById('closeImportSourceModal');
 
 // 导入按钮点击事件
 if (importBtn) {
   importBtn.addEventListener('click', () => {
+    if (importSourceModal) importSourceModal.style.display = 'block';
+    document.body.classList.add('modal-open');
+  });
+}
+
+function closeImportSource() {
+  if (importSourceModal) importSourceModal.style.display = 'none';
+  document.body.classList.remove('modal-open');
+}
+
+if (importFromFileBtn) {
+  importFromFileBtn.addEventListener('click', () => {
+    closeImportSource();
     if (importFile) importFile.click();
   });
+}
+
+if (importFromLibraryBtn) {
+  importFromLibraryBtn.addEventListener('click', () => {
+    closeImportSource();
+    openPublicLibrary();
+  });
+}
+
+if (closeImportSourceModal) closeImportSourceModal.onclick = closeImportSource;
+if (importSourceModal) {
+  importSourceModal.onclick = e => {
+    if (e.target === importSourceModal) closeImportSource();
+  };
 }
 
 // 文件选择事件
@@ -148,6 +179,127 @@ if (confirmExportBtn) {
   });
 }
 
+// ===================================
+// 公共书签库 (Public Bookmark Library)
+// ===================================
+
+const PUBLIC_LIBRARY_SOURCE = {
+  owner: 'jy02739244',
+  repo: 'bookmark-library',
+  ref: 'main',
+};
+
+const publicLibraryModal = document.getElementById('publicLibraryModal');
+const libraryListEl = document.getElementById('libraryList');
+const libraryLoadingEl = document.getElementById('libraryLoading');
+const libraryErrorEl = document.getElementById('libraryError');
+const closeLibraryModal = document.getElementById('closeLibraryModal');
+const cancelLibraryBtn = document.getElementById('cancelLibraryBtn');
+
+function buildLibraryUrl(useCdn, path) {
+  const { owner, repo, ref } = PUBLIC_LIBRARY_SOURCE;
+  return useCdn
+    ? `https://cdn.jsdelivr.net/gh/${owner}/${repo}@${ref}/${path}`
+    : `https://raw.githubusercontent.com/${owner}/${repo}/${ref}/${path}`;
+}
+
+async function fetchPublicLibraryJson(path) {
+  // 加时间戳绕过浏览器缓存，确保每次都能拿到最新书签库内容
+  const cacheBuster = `?ts=${Date.now()}`;
+  const primaryRes = await fetch(buildLibraryUrl(true, path) + cacheBuster, { cache: 'no-store' });
+  if (primaryRes.ok) return primaryRes.json();
+
+  const fallbackRes = await fetch(buildLibraryUrl(false, path) + cacheBuster, { cache: 'no-store' });
+  if (!fallbackRes.ok) throw new Error(`HTTP ${fallbackRes.status}`);
+  return fallbackRes.json();
+}
+
+function normalizePublicPreviewData(data) {
+  const categories = (data.category || []).map((c, i) => ({
+    ...c,
+    id: c.id !== undefined && c.id !== null ? Number(c.id) : (i + 1),
+    parent_id: c.parent_id ? Number(c.parent_id) : 0,
+  }));
+
+  const defaultCatId = categories.length > 0 ? categories[0].id : 0;
+
+  const sites = (data.sites || []).map(s => ({
+    ...s,
+    catelog_id: s.catelog_id !== undefined && s.catelog_id !== null
+      ? Number(s.catelog_id)
+      : defaultCatId,
+  }));
+
+  return { category: categories, sites };
+}
+
+function closePublicLibrary() {
+  if (publicLibraryModal) publicLibraryModal.style.display = 'none';
+  document.body.classList.remove('modal-open');
+}
+
+async function openPublicLibrary() {
+  if (libraryListEl) libraryListEl.innerHTML = '';
+  if (libraryLoadingEl) libraryLoadingEl.style.display = 'block';
+  if (libraryErrorEl) libraryErrorEl.style.display = 'none';
+  if (publicLibraryModal) publicLibraryModal.style.display = 'block';
+  document.body.classList.add('modal-open');
+
+  try {
+    const manifest = await fetchPublicLibraryJson('index.json');
+    const libraries = (manifest && Array.isArray(manifest.libraries)) ? manifest.libraries : [];
+    if (libraries.length === 0) throw new Error('该书签库清单为空');
+
+    if (libraryLoadingEl) libraryLoadingEl.style.display = 'none';
+    libraryListEl.innerHTML = libraries.map((lib, index) => `
+      <button type="button" class="library-item" data-index="${index}">
+        <div>
+          <div class="library-name">${escapeHTML(lib.name || '未命名')}</div>
+          ${lib.description ? `<div class="library-desc">${escapeHTML(lib.description)}</div>` : ''}
+        </div>
+        <span class="library-count">${Number(lib.count) || 0} 条</span>
+      </button>
+    `).join('');
+
+    libraryListEl.querySelectorAll('.library-item').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const library = libraries[Number(btn.dataset.index)];
+        closePublicLibrary();
+        loadPublicLibrary(library);
+      });
+    });
+  } catch (err) {
+    if (libraryLoadingEl) libraryLoadingEl.style.display = 'none';
+    if (libraryErrorEl) {
+      libraryErrorEl.style.display = 'block';
+      libraryErrorEl.textContent = '无法加载公共书签库: ' + (err.message || '网络错误');
+    }
+  }
+}
+
+async function loadPublicLibrary(library) {
+  try {
+    const data = await fetchPublicLibraryJson(library.file);
+    const previewData = normalizePublicPreviewData(data);
+    const siteCount = Array.isArray(previewData.sites) ? previewData.sites.length : 0;
+    if (siteCount === 0) {
+      showMessage('该书签库没有有效的书签', 'error');
+      return;
+    }
+    showImportPreview(previewData);
+  } catch (err) {
+    showMessage('加载书签库失败: ' + (err.message || '网络错误'), 'error');
+  }
+}
+
+if (closeLibraryModal) closeLibraryModal.onclick = closePublicLibrary;
+if (cancelLibraryBtn) cancelLibraryBtn.onclick = closePublicLibrary;
+if (publicLibraryModal) {
+  publicLibraryModal.onclick = e => {
+    if (e.target === publicLibraryModal) closePublicLibrary();
+  };
+}
+
 // 解析 Chrome 书签 HTML
 function parseChromeBookmarks(html) {
   const parser = new DOMParser();
@@ -231,22 +383,32 @@ function showImportPreview(result) {
       return items;
   }
   
+  const rootCount = result.sites.filter(s => String(s.catelog_id) === '0').length;
+  const existingDefaultRootCategory = rootCount > 0
+      ? result.category.find(c => String(c.parent_id ?? 0) === '0' && String(c.catelog || '').trim() === '默认')
+      : null;
+  if (existingDefaultRootCategory) {
+      const stats = catMap.get(existingDefaultRootCategory.id);
+      if (stats) stats.count += rootCount;
+  }
+
   const treeHtml = buildPreviewHtml(0, 0);
-  const rootCount = result.sites.filter(s => s.catelog_id === 0).length;
-  const rootHtml = rootCount > 0 ? `<li>(根目录) <span class="text-gray-500 text-xs">(${rootCount} 书签)</span></li>` : '';
+  const shouldShowVirtualRootCategory = rootCount > 0 && !existingDefaultRootCategory;
+  const rootHtml = shouldShowVirtualRootCategory ? `<li>默认 <span class="text-gray-500 text-xs">(${rootCount} 书签，将导入到「默认」分类)</span></li>` : '';
+  const previewCategoryCount = result.category.length + (shouldShowVirtualRootCategory ? 1 : 0);
 
   previewModal.innerHTML = `
     <div class="modal-content">
       <span class="modal-close" id="closePreviewModal">×</span>
       <h2>导入预览</h2>
       <div style="margin: 20px 0;">
-        <p><strong>总共发现 ${result.sites.length} 个书签，${result.category.length} 个分类</strong></p>
+        <p><strong>总共发现 ${result.sites.length} 个书签，${previewCategoryCount} 个分类</strong></p>
         <div style="margin: 10px 0; padding: 10px; border: 1px solid #eee; max-height: 300px; overflow-y: auto; background: #f9f9f9;">
            <ul class="text-sm">
              ${rootHtml}${treeHtml}
            </ul>
         </div>
-        <p style="margin-top: 15px; color: #6c757d; font-size: 0.9rem;">注意: 将按照层级结构导入。若分类已存在，将合并。</p>
+        <p style="margin-top: 15px; color: #6c757d; font-size: 0.9rem;">注意: 将按照层级结构导入。根目录书签会导入到「默认」分类。若分类已存在，将合并。</p>
         <div style="margin-top: 15px; display: flex; align-items: center; justify-content: space-between; padding: 10px; background: #f8f9fa; border-radius: 6px; border: 1px solid #e9ecef;">
             <label for="importOverride" style="font-size: 0.9rem; color: #333; cursor: pointer; font-weight: 500;">覆盖已存在书签 (根据 URL 判断)</label>
             <label class="switch"><input type="checkbox" id="importOverride"><span class="slider round"></span></label>
@@ -263,7 +425,12 @@ function showImportPreview(result) {
   
   const closePreview = () => {
       document.body.removeChild(previewModal);
-      document.body.classList.remove('modal-open'); // 恢复背景滚动
+      // WebDAV 恢复会从设置弹窗里打开预览；底层仍有弹窗时不能解除背景滚动锁。
+      const modals = document.querySelectorAll?.('.modal') || [];
+      const stillOpen = Array.from(modals).some(modal => (
+        modal.style?.display && modal.style.display !== 'none'
+      ));
+      if (!stillOpen) document.body.classList.remove('modal-open');
   };
 
   document.getElementById('closePreviewModal').onclick = closePreview;

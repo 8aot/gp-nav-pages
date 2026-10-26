@@ -17,14 +17,14 @@
   <meta name="twitter:description" content="{{SITE_DESCRIPTION}}">
   <meta name="twitter:image" content="{{OG_IMAGE_URL}}">
   <link rel="icon" href="/favicon.svg?v=148aafdf" type="image/svg+xml">
-  <link rel="stylesheet" href="/css/style.css?v=ff593a1b">
+  <link rel="stylesheet" href="/css/style.css?v=nav-footer-20261026">
   <script>
     // Init Theme ASAP to prevent FOUC
     if (localStorage.getItem('theme') === 'dark') {
       document.documentElement.classList.add('dark');
     }
   </script>
-  <link rel="stylesheet" href="/css/tailwind.min.css?v=efb4406a">
+  <link rel="stylesheet" href="/css/tailwind.min.css?v=38e0a016">
 </head>
 <body class="bg-secondary-50 font-sans text-gray-800">
   <!-- SVG sprite: 高频复用图标在此定义一次，卡片等处通过 <use href="#icon-xxx"/> 引用 -->
@@ -44,7 +44,7 @@
   </svg>
   <input type="checkbox" id="sidebar-toggle" class="hidden">
   
-  <!-- 左上角操作区 (移动端导航按钮 或 GitHub 图标) -->
+  <!-- 左上角操作区 (移动端导航按钮) -->
   {{LEFT_TOP_ACTION}}
 
   <!-- 右上角操作区 (主题切换, 后台入口) -->
@@ -64,10 +64,7 @@
   <!-- 侧边栏 -->
   <aside id="sidebar" class="sidebar fixed left-0 top-0 h-full w-64 bg-white dark:bg-gray-900 shadow-md border-r border-primary-100/60 dark:border-gray-800 z-50 overflow-y-auto mobile-sidebar lg:transform-none transition-all duration-300 {{SIDEBAR_CLASS}}">
     <div class="p-6">
-      <div class="flex items-center justify-between mb-8">
-        <a href="https://slink.661388.xyz/iori-nav" target="_blank" class="p-2 rounded-lg bg-white dark:bg-gray-800 shadow-md hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200 transition-all" title="GitHub">
-          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4"></path><path d="M9 18c-4.51 2-5-2-7-2"></path></svg>
-        </a>
+      <div class="flex items-center justify-end mb-8">
         <button id="closeSidebar" class="p-1 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700 lg:hidden">
           <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-gray-500 dark:text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
@@ -120,7 +117,7 @@
       {{HEADER_CONTENT}}
     </header>
     
-    <div class="max-w-7xl mx-auto px-4 sm:px-6 {{STATS_ROW_PY_CLASS}}">
+    <div class="home-stats-row max-w-7xl mx-auto px-4 sm:px-6 {{STATS_ROW_PY_CLASS}}">
       <div class="flex items-center justify-between {{STATS_ROW_HIDDEN}}">
         <h2 class="text-xl font-semibold text-gray-800 {{STATS_VISIBLE}}" {{STATS_STYLE}} data-role="list-heading" data-default="{{HEADING_DEFAULT}}" data-active="{{HEADING_ACTIVE}}">
           {{HEADING_TEXT}}
@@ -139,14 +136,14 @@
       </div>
     </section>
     
-    <footer class="{{FOOTER_CLASS}}">
-      <div class="max-w-5xl mx-auto text-center">
-        <div class="flex justify-center items-center">
-          <button id="openFriendLinks" class="hover:text-primary-500 transition-colors inline-flex items-center gap-2">
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
-            <span>友情链接</span>
-          </button>
+    <footer class="{{FOOTER_CLASS}} nav-footer">
+      <div class="nav-footer-inner">
+        <div class="nav-friend-links">
+          <span class="nav-friend-title">友情链接</span>
+          <a href="https://bk0.at8.ccwu.cc" target="_blank" rel="noopener noreferrer">龍哥博客</a>
+          {{FOOTER_FRIEND_LINKS}}
         </div>
+        <p class="nav-footer-copyright">Copyright © {{CURRENT_YEAR}} | {{FOOTER_TEXT}}</p>
       </div>
     </footer>
   </main>
@@ -154,6 +151,11 @@
   <button id="backToTop" class="fixed bottom-8 right-8 p-3 rounded-full bg-accent-500 text-white shadow-lg opacity-0 invisible transition-all duration-300 hover:bg-accent-600">
     <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 11l7-7 7 7M5 19l7-7 7 7" />
+    </svg>
+  </button>
+  <button type="button" id="addSiteBtnFloating" class="{{SUBMISSION_CLASS}} fixed bottom-24 right-8 z-40 hidden min-[550px]:flex p-3 rounded-full bg-accent-500 text-white shadow-lg hover:bg-accent-600 transition-all duration-300 hover:-translate-y-0.5 focus:outline-none focus:ring-2 focus:ring-accent-400 focus:ring-offset-2" title="公开投稿" aria-label="公开投稿">
+    <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 5v14M5 12h14" />
     </svg>
   </button>
   
@@ -197,6 +199,10 @@
               <option value="" disabled selected>加载中...</option>
             </select>
           </div>
+
+          <div id="addSiteTurnstile" class="hidden justify-center" style="min-height: 65px;"></div>
+
+          <div id="addSiteMessage" class="hidden rounded-lg border px-3 py-2 text-sm leading-relaxed"></div>
           
           <div class="flex justify-end pt-4">
             <button type="button" id="cancelAddSite" class="bg-white py-2 px-4 border border-primary-100 rounded-md shadow-sm text-sm font-medium text-primary-600 hover:bg-secondary-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-200 mr-3">
@@ -211,15 +217,11 @@
     </div>
   </div>
   
-
-  <div id="friendLinksModal" class="fixed inset-0 z-[100] hidden items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-    <div class="w-full max-w-4xl h-[min(480px,80vh)] overflow-hidden rounded-2xl border border-white/30 bg-white/80 dark:bg-gray-900/80 shadow-2xl backdrop-blur-xl flex flex-col">
-      <div class="flex items-center justify-between bg-gray-100/90 dark:bg-gray-800/90 px-5 py-4 border-b border-white/20"><h2 class="text-xl font-bold">友情链接</h2><button id="closeFriendLinks" class="text-gray-500 hover:text-gray-900 text-2xl leading-none" aria-label="关闭">×</button></div>
-      <div id="friendLinksContent" class="p-6 overflow-auto flex-1"><p class="text-gray-500">正在加载...</p></div>
-    </div>
-  </div>
-  <div id="friendPasswordModal" class="fixed inset-0 z-[110] hidden items-center justify-center bg-black/60 p-4"><form id="friendPasswordForm" class="w-full max-w-md rounded-xl bg-white dark:bg-gray-900 p-5 shadow-2xl"><h3 class="font-bold mb-3" id="friendPasswordTitle">此分类需要密码</h3><input id="friendPasswordInput" type="password" autocomplete="current-password" placeholder="请输入访问密码" class="w-full rounded-lg border p-3 dark:bg-gray-800"/><p id="friendPasswordError" class="text-sm text-red-500 mt-2"></p><div class="flex justify-end gap-2 mt-5"><button type="button" id="cancelFriendPassword" class="px-4 py-2 rounded-lg border">取消</button><button class="px-4 py-2 rounded-lg bg-blue-600 text-white">确定</button></div></form></div>
-  <script src="/js/friend-links.js"></script>
-  <script src="/js/main.js?v=5761bfca"></script>
+  <script src="/js/home-ui.js?v=7c74dc1b"></script>
+  <script src="/js/home-cards.js?v=acd23365"></script>
+  <script src="/js/home-submit.js?v=5457a66d"></script>
+  <script src="/js/home-search.js?v=fd3df0ae"></script>
+  <script src="/js/home-category-nav.js?v=category-password-1"></script>
+  <script src="/js/main.js?v=193ce81f"></script>
 </body>
 </html>
