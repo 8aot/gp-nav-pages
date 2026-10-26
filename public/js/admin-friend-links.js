@@ -1,0 +1,24 @@
+(() => {
+ const $ = id => document.getElementById(id);
+ const rows = $('friendLinksAdminRows'), categories = $('friendCategoryPasswords'), msg = $('friendLinksAdminMessage');
+ if (!rows || !categories) return;
+ let links = [], categoryPasswords = {};
+ const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+ function renderCategories() {
+   const names = [...new Set([...links.map(x=>x.category||'默认'), ...Object.keys(categoryPasswords)])];
+   categories.innerHTML = names.map(c => `<div style="display:grid;grid-template-columns:minmax(120px,1fr) minmax(140px,1fr) auto;gap:8px;align-items:center"><strong>${esc(c)}</strong><input data-category-password="${esc(c)}" type="password" autocomplete="new-password" placeholder="分类密码（留空则无密码）" value="${esc(categoryPasswords[c]||'')}" style="padding:8px;border:1px solid #cbd5e1;border-radius:8px"><button type="button" data-remove-category="${esc(c)}" style="padding:8px;border:1px solid #fecaca;color:#b91c1c;border-radius:8px">清除分类密码</button></div>`).join('');
+   categories.querySelectorAll('[data-category-password]').forEach(i=>i.addEventListener('input',()=>{categoryPasswords[i.dataset.categoryPassword]=i.value;}));
+   categories.querySelectorAll('[data-remove-category]').forEach(b=>b.addEventListener('click',()=>{delete categoryPasswords[b.dataset.removeCategory];renderCategories();}));
+ }
+ function renderRows() {
+   rows.innerHTML = links.map((x,i)=>`<div data-link-row="${i}" style="padding:14px;border:1px solid #e2e8f0;border-radius:10px;display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px"><label style="font-size:12px;color:#64748b">链接名称<input data-field="title" value="${esc(x.title)}" placeholder="例如：百度" style="display:block;width:100%;padding:8px;border:1px solid #cbd5e1;border-radius:7px;margin-top:4px"></label><label style="font-size:12px;color:#64748b">链接网址<input data-field="url" value="${esc(x.url)}" placeholder="https://example.com" style="display:block;width:100%;padding:8px;border:1px solid #cbd5e1;border-radius:7px;margin-top:4px"></label><label style="font-size:12px;color:#64748b">分类<input data-field="category" value="${esc(x.category||'默认')}" placeholder="默认" style="display:block;width:100%;padding:8px;border:1px solid #cbd5e1;border-radius:7px;margin-top:4px"></label><label style="font-size:12px;color:#64748b">单链接密码（可选）<input data-field="password" type="password" autocomplete="new-password" value="${esc(x.password||'')}" placeholder="留空不单独加密" style="display:block;width:100%;padding:8px;border:1px solid #cbd5e1;border-radius:7px;margin-top:4px"></label><div style="display:flex;align-items:end"><button type="button" data-delete-link="${i}" style="padding:8px 12px;border:1px solid #fecaca;color:#b91c1c;border-radius:8px">删除此链接</button></div></div>`).join('') || '<p style="color:#64748b">暂无友情链接，点击“添加链接”开始。</p>';
+   rows.querySelectorAll('[data-field]').forEach(input=>input.addEventListener('input',()=>{const row=Number(input.closest('[data-link-row]').dataset.linkRow);links[row][input.dataset.field]=input.value;if(input.dataset.field==='category')renderCategories();}));
+   rows.querySelectorAll('[data-delete-link]').forEach(b=>b.addEventListener('click',()=>{links.splice(Number(b.dataset.deleteLink),1);renderRows();renderCategories();}));
+ }
+ async function load(){msg.textContent='加载中…';try{const r=await fetch('/api/friend-links');const j=await r.json();if(!r.ok||j.code!==200)throw new Error(j.message||'请先登录管理后台');links=(j.data||[]).map((x,i)=>({id:x.id||`${Date.now()}-${i}`,title:x.title||'',url:x.url||'',category:x.category||'默认',password:x.password||''}));categoryPasswords=j.categoryPasswords||{};renderCategories();renderRows();msg.textContent='已加载';}catch(e){msg.textContent=e.message||'加载失败';}}
+ $('loadFriendLinks').addEventListener('click',load);
+ $('addFriendLinkRow').addEventListener('click',()=>{links.push({id:`${Date.now()}-${Math.random().toString(36).slice(2,7)}`,title:'',url:'',category:'默认',password:''});renderRows();renderCategories();});
+ $('addFriendCategory').addEventListener('click',()=>{const name=prompt('请输入分类名称');if(!name||!name.trim())return;const c=name.trim();if(!links.some(x=>x.category===c))links.push({id:`${Date.now()}-${Math.random().toString(36).slice(2,7)}`,title:'',url:'',category:c,password:''});renderRows();renderCategories();});
+ $('saveFriendLinks').addEventListener('click',async()=>{try{const cleaned=links.filter(x=>x.title.trim()||x.url.trim());msg.textContent='保存中…';const r=await fetch('/api/friend-links',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({links:cleaned,categoryPasswords})});const j=await r.json();if(!r.ok||j.code!==200)throw new Error(j.message||'保存失败');links=cleaned;msg.textContent='保存成功';renderRows();renderCategories();}catch(e){msg.textContent=e.message||'保存失败';}});
+ load();
+})();
