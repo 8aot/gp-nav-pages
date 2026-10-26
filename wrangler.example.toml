@@ -18,11 +18,11 @@ command = "npm run build:css"
 
 [[d1_databases]]
 binding = "NAV_DB"
-database_name = "book"
+database_name = "gp-nav-db"
 database_id = "PASTE_YOUR_D1_DATABASE_ID_HERE"
 
 [[kv_namespaces]]
-binding = "NAV_AUTH"
+binding = "GP-NAV-NAV"
 id = "PASTE_YOUR_KV_NAMESPACE_ID_HERE"
 
 [vars]
