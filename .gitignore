@@ -1,0 +1,31 @@
+# OS
+.DS_Store
+Thumbs.db
+
+node_modules/
+.agent-teams/
+.wrangler/
+wrangler.toml
+test-data.sql
+clear-data.sql
+
+# Husky internal files
+.husky/_
+
+# Editor
+.vscode/
+.idea/
+.trae/
+.gemini/
+.cursor/
+.codex/
+.claude/
+.kiro/
+.github/
+.agent/
+.roo/
+.zcode/
+.shared/
+.windsurf/
+*.swp
+*.swo
