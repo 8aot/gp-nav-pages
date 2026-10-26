@@ -30,20 +30,25 @@
 
 ## 🖼️ 效果预览
 
-| 首页 | 后台管理 |
+| 风格一 | 风格一 |
 | :---: | :---: |
-| ![首页预览](https://github.com/user-attachments/assets/b106be25-5be4-4ae6-98aa-e1fae38b5a3d) | ![后台预览](https://github.com/user-attachments/assets/49461d13-e48b-400d-b15c-3fa2d1a0460e) |
-| ![首页预览](https://github.com/user-attachments/assets/4cb39e41-a7a5-46c7-876c-62021fa5611e) | ![后台预览](https://github.com/user-attachments/assets/4d3bb3f4-da65-400a-a41d-eeaecedb7197) |
+| ![风格一预览 1](./image/fengge1_1.png) | ![风格一预览 2](./image/fengge1_2.png) |
 
-| 大卡片 | 小卡片 |
+| 风格二 | 风格三 |
 | :---: | :---: |
-| ![大卡片预览](https://github.com/user-attachments/assets/e77d1c10-aba4-4755-8a62-416fe3a8239e) | ![小卡片预览](https://github.com/user-attachments/assets/b2508b55-bbf6-4998-a111-a7b75eb8686b) |
+| ![风格二预览](./image/fengge2.png) | ![风格三预览](./image/fengge3.png) |
 
-| 简洁风格 | 夜间模式 |
+| 桌面设置界面 | 移动设置界面 |
 | :---: | :---: |
-| ![简洁风格预览](https://github.com/user-attachments/assets/3a70b18a-5301-4218-a75f-869fbbdaa7a4) | ![夜间模式预览](https://github.com/user-attachments/assets/9e51cf5c-4064-4b8d-ad2c-e0ca9e006834) |
+| ![桌面设置界面预览](./image/setting.png) | ![移动设置界面预览](./image/phone_setting.png) |
 
-> 💡 卡片的毛玻璃效果和程度可以在后台设置里自定义。后台设置页面为 URL 后加 `/admin`
+后台设置页支持分别配置桌面端与手机端卡片，包括卡片列数、卡片风格、切换动画、是否隐藏描述/链接行/分类、毛玻璃效果、圆角以及标题和描述的字体样式。后台设置页面为 URL 后加 `/admin`。
+
+| 手机端风格一 | 手机端风格二 | 手机端风格三 |
+| :---: | :---: | :---: |
+| ![手机端风格一预览](./image/phone_1.png) | ![手机端风格二预览](./image/phone_2.png) | ![手机端风格三预览](./image/phone_3.png) |
+
+> 💡 手机端可独立设置 1/2/3 列布局，并根据卡片密度自动优化复制按钮显示；卡片的毛玻璃效果和程度也可以在后台设置里自定义。
 
 ---
 
@@ -58,7 +63,7 @@
 | 🔒 **安全后台** | 基于 KV 的管理员认证，提供完整的书签增删改查后台 |
 | 📝 **用户提交** | 支持访客提交书签，经管理员审核后显示（可通过环境变量关闭） |
 | ⚡ **性能卓越** | 利用 Cloudflare 边缘缓存，秒级加载，节省 D1 数据库读取成本 |
-| 📤 **数据管理** | 支持书签数据的导入与导出，兼容 Chrome 导出的 HTML 格式 |
+| 📤 **数据管理** | 支持书签数据的导入与导出，兼容 Chrome 导出的 HTML 格式，也可从公共书签库一键导入 |
 
 ---
 
@@ -69,7 +74,7 @@
 - 🔐 **访客投稿可控**：通过 `ENABLE_PUBLIC_SUBMISSION` 环境变量即可关闭前台投稿入口，相关接口自动返回 403。
 - 🤖 **AI 一键自动生成描述**：提供 Workers AI、Google Gemini 和 OpenAI 接口。
 - 🖼️ **Logo 自动生成**：默认使用 [faviconsnap.com](https://faviconsnap.com) 接口，可在环境变量中自定义。
-- 📦 **导入导出数据**：提供书签数据的导入与导出，支持 Chrome 导出的 HTML 格式一键导入。
+- 📦 **导入导出数据**：提供书签数据的导入与导出，支持 Chrome 导出的 HTML 格式一键导入，也可直接从[公共书签库](https://github.com/jy02739244/bookmark-library)选取现成书签集导入。
 
 ---
 
@@ -124,8 +129,10 @@
 3. 点击 `添加绑定`，选择 `KV 命名空间`：
     - 变量名称：`NAV_AUTH`
     - KV 命名空间：选择你创建的 `NAV_AUTH`
+4. 如需使用 Cloudflare Workers AI，继续点击 `添加绑定`，选择 `Workers AI`：
+    - 变量名称：`AI`
 
-<img width="2152" height="1236" alt="绑定服务" src="https://github.com/user-attachments/assets/9dd15cd0-8173-4dec-af87-d8ef0bdeaa38" />
+<img width="2152" height="1236" alt="绑定服务" src="./image/bind.png" />
 
 ### 步骤 6：重新部署
 
@@ -137,11 +144,14 @@
 
 ## 🧪 本地开发
 
-> 本地开发依赖 `wrangler.toml`（该文件已 `.gitignore`），请先填入你自己的 D1/KV 资源 ID。
+> 本地开发依赖 `wrangler.toml`。仓库提供了可提交的 `wrangler.example.toml` 模板，真实配置文件仍会被 `.gitignore` 忽略，避免误提交资源 ID 或密钥。
 
 ```bash
 # 安装依赖（TailwindCSS / Husky）
 npm install
+
+# 复制本地配置模板，并填入你自己的 D1/KV 资源 ID
+cp wrangler.example.toml wrangler.toml
 
 # 构建 CSS（首次或修改 tailwind.css 后执行）
 npm run build:css
@@ -163,8 +173,13 @@ npx wrangler d1 execute book --local --file=schema.sql
 | :--- | :--- | :--- |
 | `NAV_DB` | D1 | 主数据库绑定（必需） |
 | `NAV_AUTH` | KV | 会话、限流、缓存标记存储（必需） |
+### 2) 条件绑定（Pages 项目设置 -> 绑定）
 
-### 2) 可选变量（Pages 项目设置 -> 变量和机密）
+| 绑定名 | 类型 | 说明 |
+| :--- | :--- | :--- |
+| `AI` | Workers AI | 使用 Cloudflare Workers AI 生成描述时必需 |
+
+### 3) 可选变量（Pages 项目设置 -> 变量和机密）
 
 | 变量名 | 默认值 | 说明 |
 | :--- | :--- | :--- |
@@ -174,13 +189,18 @@ npx wrangler d1 execute book --local --file=schema.sql
 | `FOOTER_TEXT` | `曾梦想仗剑走天涯` | 首页页脚文案 |
 | `ICON_API` | `https://faviconsnap.com/api/favicon?url=` | 自动补全 logo 的接口前缀 |
 | `AI_REQUEST_DELAY` | `1500` | AI 一键补全描述调用间隔（毫秒） |
+| `WORKERS_AI_MODEL` | `@cf/google/gemma-4-26b-a4b-it` | Workers AI 模型兜底；后台 AI 设置中保存的模型优先 |
+| `TURNSTILE_SITE_KEY` | 空 | Cloudflare Turnstile 站点密钥；与 `TURNSTILE_SECRET_KEY` 同时配置后启用后台登录与公开投稿人机验证 |
+| `TURNSTILE_SECRET_KEY` | 空 | Cloudflare Turnstile 机密密钥；与 `TURNSTILE_SITE_KEY` 同时配置后启用后台登录与公开投稿人机验证 |
 
 > `DISPLAY_CATEGORY` 已废弃，当前版本不会读取该变量。
 
 ### 3) 配置优先级说明
 
 - 首页名称/副标题等支持后台设置项的字段，优先读取数据库 `settings`，环境变量作为兜底。
-- `AI_REQUEST_DELAY` 在代码中的默认兜底为 `1500`；本地 `wrangler.toml` 示例值为 `500`，可按 API 限频自行调整。
+- `AI_REQUEST_DELAY` 在代码中的默认兜底为 `1500`；本地可按 API 限频自行调整。
+- Workers AI 的模型可以在后台 AI 设置中手动填写；需要使用 Workers AI 的 `@cf/...` 模型名。
+- Workers AI 设置推荐：`@cf/google/gemma-4-26b-a4b-it`（默认）、`@cf/mistralai/mistral-small-3.1-24b-instruct`、`@cf/qwen/qwq-32b`、`@cf/qwen/qwen3-30b-a3b-fp8`、`@cf/meta/llama-3.1-8b-instruct-fp8`。其余模型请自行测试。
 
 > **💡 提示**：如使用免费的 Gemini API Key（模型 `gemini-2.5-flash-lite`），频率限制为 15 次/分钟，请根据实际情况调整 `AI_REQUEST_DELAY`。
 
@@ -189,6 +209,35 @@ npx wrangler d1 execute book --local --file=schema.sql
 > 后台管理页面地址为：`https://你的域名/admin`
 
 后台登录凭据存放在 `NAV_AUTH` KV 中的 `admin_username` 与 `admin_password` 两个键内。登录 `/admin` 时需要在页面表单中输入账号与密码，系统会返回一个 **HttpOnly 会话 Cookie（默认 1 天，可选 1/7/30/60/90 天）**，无需也不再支持在 URL 查询参数中传递凭据。点击后台右上角的 **"退出登录"** 按钮即可立即销毁会话。
+
+如需给后台登录与公开投稿增加 Cloudflare Turnstile 人机验证，请在 Cloudflare Turnstile 控制台创建站点后，将站点密钥配置为 `TURNSTILE_SITE_KEY`，机密密钥配置为 `TURNSTILE_SECRET_KEY`。两个变量都为空时会保持原流程；只配置其中一个会提示配置不完整。
+
+---
+
+## 📦 数据导入与导出
+
+在后台点击 **导入** 后，会先让你选择导入来源：**上传文件** 或 **公共书签库**。两种来源都会进入同一个导入预览页，可以勾选需要的书签、选择目标分类，确认后再写入数据库。
+
+### 方式一：上传文件
+
+支持两种格式：
+
+- **Chrome 书签 HTML**：浏览器「书签管理器 -> 导出书签」得到的文件，书签栏的文件夹层级会被解析成分类。
+- **JSON**：结构与 **导出** 功能产出的文件一致，形如 `{ "category": [...], "sites": [...] }`。
+
+导入时同一 URL 只会保留一条（比对时会忽略末尾斜杠，`https://example.com/` 与 `https://example.com` 视为同一个）。选择覆盖已有书签时，原有的排序值会保留，不会被打乱。
+
+### 方式二：公共书签库
+
+公共书签库是一个独立维护的书签集合仓库，按主题分成若干书签库（如开发工具、设计资源等），可以直接选一个整包导入，省去自己从零收集。
+
+> **仓库地址**：<https://github.com/jy02739244/bookmark-library>
+
+后台会先读取仓库根目录的 `index.json` 清单，列出可选书签库及其书签条数；点选后再拉取对应的书签 JSON 文件并进入导入预览。数据通过 [jsDelivr](https://www.jsdelivr.com/) CDN 读取，CDN 不可用时自动回退到 `raw.githubusercontent.com`。
+
+这两个域名都是公开只读访问，无需任何 Token；但请求由**浏览器**发出，若你所在网络无法访问 GitHub 与 jsDelivr，书签库列表会加载失败，此时请改用上传文件的方式。
+
+欢迎向该仓库提 PR 补充书签库。
 
 ---
 
@@ -215,6 +264,28 @@ npx wrangler d1 execute book --local --file=schema.sql
 ## 📋 更新日志
 
 <!-- changelog:start -->
+- 📂 **2026-07-14**：增加卡片风格三，风格增加默认壁纸
+- 🔧 **2026-06-23**：清理 AI 设置调试日志
+- 📂 **2026-06-21**：增强分类结构与私密数据支持
+- 🛡️ **2026-06-20**：优化登录会话与安全防护
+- 📦 **2026-06-09**：增强导入导出与批量管理能力
+- 🎨 **2026-06-08**：优化卡片样式与后台界面体验
+- 🎨 **2026-06-07**：增加手机卡片设置
+- 🎨 **2026-06-06**：首页设置预览与页脚优化
+- 🎞️ **2026-06-05**：新增卡片动画并隐藏图标
+- 🔧 **2026-05-28**：拆分设置模块并补充测试
+- 🛡️ **2026-05-06**：完善投稿审核与安全校验
+- 🐞 **2026-05-05**：修复后台HTML转义
+- 🔧 **2026-04-20**：补缓存头并清理资源
+- 🔧 **2026-04-19**：精简字体与后台逻辑
+- ⚡ **2026-04-17**：深度优化首页性能
+- ⚡ **2026-03-31**：优化查询与缓存一致性
+- 🐞 **2026-03-27**：稳定首页缓存与搜索
+- 🛡️ **2026-03-15**：增加CSRF安全防护
+- 🛡️ **2026-03-14**：强化SQL注入防护
+- 🔧 **2026-03-07**：统一数据库迁移流程
+- 🖼️ **2026-03-04**：更新图标获取接口
+- ⚡ **2026-02-26**：优化首页交互与文档
 - ⚡ **2026-02-24**：优化缓存策略并提升加载性能
 - 🖼️ **2026-02-23**：优化壁纸功能与加载体验，并补充文档说明
 - 🐞 **2026-01-24**：修复若干问题并提升稳定性，并加强登录安全
@@ -265,4 +336,4 @@ npx wrangler d1 execute book --local --file=schema.sql
 
 ## ⭐ Star 趋势
 
-[![Star History Chart](https://api.star-history.com/svg?repos=jy02739244/iori-nav&type=date&legend=top-left)](https://www.star-history.com/#jy02739244/iori-nav&type=date&legend=top-left)
+[![Star History Chart](https://star-history.dera.page/svg?repos=jy02739244/iori-nav)](https://star-history.dera.page/#jy02739244/iori-nav)

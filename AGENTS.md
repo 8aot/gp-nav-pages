@@ -51,7 +51,7 @@ npx wrangler d1 execute book --local --file=schema.sql
 npx wrangler d1 execute book --remote --file=schema.sql
 ```
 
-**注意**: 本项目使用少量 npm 开发依赖（如 TailwindCSS、Husky），无测试框架、无 lint 工具。
+**注意**: 本项目使用少量 npm 开发依赖（如 TailwindCSS、Husky），测试使用 Node.js 内置 `node:test`，暂无 lint 工具。
 
 **版本号自动化**: pre-commit hook 会根据 CSS/JS 文件内容自动更新 HTML 中的 `?v=` 哈希（见 `scripts/update-versions.js`），无需手动维护。
 
@@ -63,6 +63,11 @@ npx wrangler d1 execute book --remote --file=schema.sql
 - **函数**: camelCase（`isAdminAuthenticated`）
 - **常量**: UPPER_SNAKE_CASE（`DB_SCHEMA`）
 - **布尔变量**: is/has 前缀（`isValid`、`hasChildren`）
+
+### 文件规模与提交规范
+
+- **新增文件行数**: 单个新增文件最好不要超过 500 行；如果实现接近或超过该规模，优先按职责拆分为多个模块。
+- **提交信息**: Git commit message 使用中文，简洁描述本次改动。
 
 ### 导入规范
 
