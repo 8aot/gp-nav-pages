@@ -580,7 +580,6 @@
                     <label class="search-engine-option active" data-engine="local"><span>站内</span></label>
                     <label class="search-engine-option" data-engine="google"><span>Google</span></label>
                     <label class="search-engine-option" data-engine="baidu"><span>Baidu</span></label>
-                    <label class="search-engine-option" data-engine="github"><span>Github</span></label>
                   </div>
                   <div class="live-search-box">
                     <input type="text" name="search" placeholder="搜索书签..."
@@ -1454,6 +1453,18 @@
 
             <div class="batch-actions-section" style="margin-top: 1rem;">
               <div class="bulk-action-box">
+                <p class="form-hint">备份当前导航站点设置（外观、布局、搜索、页脚等）为 JSON 文件，方便迁移或恢复。出于安全考虑，不包含 API 密钥和 WebDAV 密码。</p>
+                <div class="flex flex-wrap gap-2 mt-3">
+                  <button type="button" id="backupCurrentSettingsBtn" class="button-secondary"><span>📥</span> 备份当前配置</button>
+                  <button type="button" id="importSettingsBtn" class="button-secondary"><span>📤</span> 导入设置</button>
+                  <input type="file" id="importSettingsFile" accept=".json,application/json" hidden>
+                </div>
+                <p id="settingsBackupStatus" class="form-hint" style="display:none;"></p>
+              </div>
+            </div>
+
+            <div class="batch-actions-section" style="margin-top: 1rem;">
+              <div class="bulk-action-box">
                 <p class="form-hint">备份分类与书签（含私密内容），每次生成一个带 UTC 时间戳的新文件，历史版本会保留。不含系统设置与待审核列表。</p>
                 <button id="webdavBackupBtn" class="button-secondary">
                   <span>☁️</span> 立即备份
@@ -1795,6 +1806,7 @@
   <script src="/js/admin-settings-ai.js?v=0d8c0558"></script>
   <script src="/js/admin-settings-backup-ui.js?v=68eb553d"></script>
   <script src="/js/admin-settings-backup.js?v=6673ac41"></script>
+  <script src="/js/admin-settings-transfer.js?v=20261027"></script>
   <script src="/js/admin-settings.js?v=22ceba7e"></script>
   <script src="/js/admin-import-export.js?v=443f2c90"></script>
 </body>

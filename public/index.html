@@ -17,7 +17,7 @@
   <meta name="twitter:description" content="{{SITE_DESCRIPTION}}">
   <meta name="twitter:image" content="{{OG_IMAGE_URL}}">
   <link rel="icon" href="/favicon.svg?v=148aafdf" type="image/svg+xml">
-  <link rel="stylesheet" href="/css/style.css?v=nav-footer-20261026">
+  <link rel="stylesheet" href="/css/style.css?v=friend-modal-20261027">
   <script>
     // Init Theme ASAP to prevent FOUC
     if (localStorage.getItem('theme') === 'dark') {
@@ -139,7 +139,7 @@
     <footer class="{{FOOTER_CLASS}} nav-footer">
       <div class="nav-footer-inner">
         <div class="nav-friend-links">
-          <span class="nav-friend-title">友情链接</span>
+          <button type="button" class="nav-friend-title" id="openFriendLinks" aria-haspopup="dialog" aria-controls="friendLinksModal"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.07 0l3-3A5 5 0 0 0 13 2.93l-1.72 1.72M14 11a5 5 0 0 0-7.07 0l-3 3A5 5 0 0 0 11 21.07l1.72-1.72"/></svg>友情链接</button>
           <a href="https://bk0.at8.ccwu.cc" target="_blank" rel="noopener noreferrer">龍哥博客</a>
           {{FOOTER_FRIEND_LINKS}}
         </div>
@@ -147,6 +147,16 @@
       </div>
     </footer>
   </main>
+
+  <div id="friendLinksModal" class="friend-links-modal" role="dialog" aria-modal="true" aria-labelledby="friendLinksTitle" aria-hidden="true">
+    <div class="friend-links-dialog">
+      <div class="friend-links-modal-header">
+        <h2 id="friendLinksTitle">友情链接</h2>
+        <button type="button" id="closeFriendLinks" aria-label="关闭友情链接">×</button>
+      </div>
+      <div id="friendLinksGrid" class="friend-links-grid"></div>
+    </div>
+  </div>
   
   <button id="backToTop" class="fixed bottom-8 right-8 p-3 rounded-full bg-accent-500 text-white shadow-lg opacity-0 invisible transition-all duration-300 hover:bg-accent-600">
     <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -223,5 +233,6 @@
   <script src="/js/home-search.js?v=fd3df0ae"></script>
   <script src="/js/home-category-nav.js?v=category-password-1"></script>
   <script src="/js/main.js?v=193ce81f"></script>
+  <script src="/js/friend-links-modal.js?v=20261027"></script>
 </body>
 </html>
