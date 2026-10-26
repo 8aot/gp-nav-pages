@@ -34,7 +34,7 @@ function _renderHorizontalItems(cats, currentCatalogName, level) {
             : '';
         const childrenHtml = hasChildren ? `<div class="dropdown-menu">${_renderHorizontalItems(cat.children, currentCatalogName, level + 1)}</div>` : '';
 
-        return `<div class="${wrapperClass}"><a href="${linkUrl}" class="${linkClass}" data-id="${cat.id}">${safeName}${arrowSvg}</a>${childrenHtml}</div>`;
+        return `<div class="${wrapperClass}"><a href="${linkUrl}" class="${linkClass}" data-id="${cat.id}" data-protected="${cat.password_protected ? '1' : '0'}">${safeName}${arrowSvg}</a>${childrenHtml}</div>`;
     }).join('');
 }
 
