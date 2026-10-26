@@ -9,7 +9,7 @@
 #  Production bindings and secrets should be configured in Cloudflare.
 # =================================================================
 
-name = "iori-nav"
+name = "gp-nav-pages"
 compatibility_date = "2025-09-06"
 pages_build_output_dir = "public"
 
