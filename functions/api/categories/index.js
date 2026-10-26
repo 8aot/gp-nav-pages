@@ -25,11 +25,11 @@ export async function onRequestGet(context) {
       : 'LEFT JOIN sites s ON c.id = s.catelog_id';
 
     const { results } = await env.NAV_DB.prepare(`
-        SELECT c.id, c.catelog, c.sort_order, c.parent_id, c.is_private, COUNT(s.id) AS site_count
+        SELECT c.id, c.catelog, c.sort_order, c.parent_id, c.is_private, CASE WHEN c.password_hash IS NOT NULL AND c.password_hash != '' THEN 1 ELSE 0 END AS password_protected, COUNT(s.id) AS site_count
         FROM category c
         ${siteJoin}
         ${categoryFilter}
-        GROUP BY c.id, c.catelog, c.sort_order, c.parent_id, c.is_private
+        GROUP BY c.id, c.catelog, c.sort_order, c.parent_id, c.is_private, c.password_hash
         ORDER BY c.sort_order ASC, c.create_time DESC
         LIMIT ? OFFSET ?
       `).bind(pageSize, offset).all();

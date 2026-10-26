@@ -1,11 +1,13 @@
 // functions/index.js
 import { isAdminAuthenticated, getHomeCacheKey, clearHomeCacheDirty, markHomeCacheDirty, getHomeCacheDirtyValue } from './_middleware';
 import { FONT_MAP, HOME_CACHE_TTL } from './constants';
-import { escapeHTML, sanitizeUrl, normalizeSortOrder, getStyleStr } from './lib/utils';
+import { escapeHTML, sanitizeUrl, normalizeSortOrder, getStyleStr, sanitizeStyleColor } from './lib/utils';
 import { getSettingsKeys, parseSettings } from './lib/settings-parser';
 import { renderHorizontalMenu, renderVerticalMenu } from './lib/menu-renderer';
 import { renderSiteCards, renderEmptyState } from './lib/card-renderer';
+import { buildCardHydrationState } from './lib/card-model';
 import { ensureSchemaReady } from './lib/schema-migration';
+import { resolveWallpaperUrl } from './lib/wallpaper-defaults';
 
 // 模板内容在 Worker 运行时实例生命周期内不变（部署会替换实例），缓存避免每次 MISS 重复 ASSETS.fetch
 let cachedTemplateHtml = null;
@@ -32,6 +34,12 @@ function getThemeClasses(isCustomWallpaper) {
     searchInputClass: 'bg-white/15 text-white placeholder-primary-200 focus:ring-white/30 focus:bg-white/20 border-none dark:bg-gray-800/50 dark:text-gray-200 dark:placeholder-gray-500',
     searchIconClass: 'text-primary-200 dark:text-gray-500',
   };
+}
+
+function normalizeCssPixelValue(value, fallback) {
+  const normalized = String(value ?? '').trim().replace(/[^0-9]/g, '');
+  if (normalized === '') return String(fallback);
+  return normalized;
 }
 
 export async function onRequest(context) {
@@ -100,14 +108,14 @@ export async function onRequest(context) {
 
   // === 2. 并行执行数据库查询 + 模板获取 ===
   const categoryQuery = isAuthenticated
-    ? 'SELECT id, catelog, sort_order, parent_id, is_private FROM category ORDER BY sort_order ASC, id ASC'
-    : 'SELECT id, catelog, sort_order, parent_id FROM category WHERE is_private = 0 ORDER BY sort_order ASC, id ASC';
+    ? 'SELECT id, catelog, sort_order, parent_id, is_private, CASE WHEN password_hash IS NOT NULL THEN 1 ELSE 0 END AS password_protected FROM category ORDER BY sort_order ASC, id ASC'
+    : 'SELECT id, catelog, sort_order, parent_id, CASE WHEN password_hash IS NOT NULL THEN 1 ELSE 0 END AS password_protected FROM category WHERE is_private = 0 ORDER BY sort_order ASC, id ASC';
 
   const settingsKeys = getSettingsKeys();
   const settingsPlaceholders = settingsKeys.map(() => '?').join(',');
   // sort_order 仅用于 ORDER BY，不参与 SELECT（SQLite 允许）；前端不使用该字段
   const sitesQuery = `SELECT id, name, url, logo, desc, catelog_id, catelog_name
-                      FROM sites WHERE (is_private = 0 OR ? = 1) ORDER BY sort_order ASC, create_time DESC`;
+                      FROM sites WHERE (is_private = 0 OR ? = 1) AND (? = 1 OR NOT EXISTS (SELECT 1 FROM category c WHERE c.id = sites.catelog_id AND c.password_hash IS NOT NULL)) ORDER BY sort_order ASC, create_time DESC`;
 
   // Settings 缓存：优先从 KV 读取，减少数据库查询
   const settingsCacheKey = 'settings_cache';
@@ -130,7 +138,7 @@ export async function onRequest(context) {
   const [categoriesResult, settingsResult, sitesResult, templateHtml] = await Promise.all([
     env.NAV_DB.prepare(categoryQuery).all().catch(e => ({ results: [], error: e })),
     fetchSettings().catch(e => ({ results: [], error: e })),
-    env.NAV_DB.prepare(sitesQuery).bind(includePrivate).all().catch(e => ({ results: [], error: e })),
+    env.NAV_DB.prepare(sitesQuery).bind(includePrivate, includePrivate).all().catch(e => ({ results: [], error: e })),
     getTemplateHtml(env, request.url)
   ]);
 
@@ -170,24 +178,35 @@ export async function onRequest(context) {
   let allSites = sitesResult.results || [];
   if (sitesResult.error) return new Response(`Failed to fetch sites: ${sitesResult.error.message}`, { status: 500 });
 
+  function resolveCatalogId(catalogValue, options = {}) {
+    const value = String(catalogValue || '').trim();
+    if (!value || value.toLowerCase() === 'all') return null;
+    if (/^\d+$/.test(value)) {
+      const id = Number(value);
+      if (categoryMap.has(id)) return id;
+    }
+    return options.allowName && categoryIdMap.has(value) ? categoryIdMap.get(value) : null;
+  }
+
   // === 6. 确定目标分类 ===
-  let requestedCatalogName = (url.searchParams.get('catalog') || '').trim();
+  const requestedCatalogValue = (url.searchParams.get('catalog') || '').trim();
+  let requestedCatalogId = resolveCatalogId(requestedCatalogValue);
 
   // 共享首页缓存仅基于稳定的默认分类渲染，避免用户的 iori_last_category
   // 影响公共 KV HTML。记住上次分类的恢复逻辑仅在前端执行。
-  if (!requestedCatalogName) {
+  if (!requestedCatalogValue) {
     const defaultCat = (S.home_default_category || '').trim();
-    if (defaultCat && categoryIdMap.has(defaultCat)) requestedCatalogName = defaultCat;
+    requestedCatalogId = resolveCatalogId(defaultCat, { allowName: true });
   }
 
   let targetCategoryIds = [];
   let currentCatalogName = '';
-  const catalogExists = requestedCatalogName && categoryIdMap.has(requestedCatalogName);
+  const catalogExists = requestedCatalogId !== null;
 
   if (catalogExists) {
-    const rootId = categoryIdMap.get(requestedCatalogName);
-    currentCatalogName = requestedCatalogName;
-    targetCategoryIds.push(rootId);
+    const requestedCategory = categoryMap.get(requestedCatalogId);
+    currentCatalogName = requestedCategory.catelog;
+    targetCategoryIds.push(requestedCatalogId);
   }
 
   const sites = targetCategoryIds.length > 0
@@ -195,8 +214,9 @@ export async function onRequest(context) {
     : allSites;
 
   // === 7. 壁纸处理 ===
-  // 壁纸 URL 直接使用设置中的 layout_custom_wallpaper，可被 KV 正常缓存
-  const isCustomWallpaper = Boolean(S.layout_custom_wallpaper);
+  // 自定义壁纸优先；留空时使用当前桌面卡片风格的默认壁纸
+  const resolvedWallpaperUrl = resolveWallpaperUrl(S.layout_custom_wallpaper, S.layout_card_style);
+  const isCustomWallpaper = Boolean(resolvedWallpaperUrl);
   const themeClass = isCustomWallpaper ? 'custom-wallpaper' : '';
 
   // === 8. 计算主题样式 ===
@@ -220,14 +240,24 @@ export async function onRequest(context) {
     : renderEmptyState(categories.length, S.home_hide_admin);
 
   // === 11. 计算 Grid 列数 ===
-  let gridClass = 'grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-6 justify-items-center';
-  if (S.layout_grid_cols === '5') {
-    gridClass = 'grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-6 justify-items-center';
-  } else if (S.layout_grid_cols === '6') {
-    gridClass = 'grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 min-[1200px]:grid-cols-6 gap-3 sm:gap-6 justify-items-center';
-  } else if (S.layout_grid_cols === '7') {
-    gridClass = 'grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 xl:grid-cols-7 gap-3 sm:gap-6 justify-items-center';
-  }
+  const getMobileGridClass = (cols) => {
+    if (cols === '1') return 'grid-cols-1';
+    if (cols === '3') return 'grid-cols-3';
+    return 'grid-cols-2';
+  };
+  const getDesktopGridClass = (cols) => {
+    if (cols === '5') return 'md:grid-cols-3 lg:grid-cols-5';
+    if (cols === '6') return 'md:grid-cols-3 lg:grid-cols-5 min-[1200px]:grid-cols-6';
+    if (cols === '7') return 'md:grid-cols-3 lg:grid-cols-5 xl:grid-cols-7';
+    return 'md:grid-cols-3 lg:grid-cols-4';
+  };
+  const getCardStyleGridClass = (style, prefix) => {
+    if (style === 'style3') return `${prefix}-card-style3`;
+    return style === 'style2' ? `${prefix}-card-style2` : `${prefix}-card-style1`;
+  };
+  const mobileCardStyleClass = getCardStyleGridClass(S.mobile_layout_card_style, 'mobile');
+  const desktopCardStyleClass = getCardStyleGridClass(S.layout_card_style, 'desktop');
+  let gridClass = `grid ${getMobileGridClass(S.mobile_layout_grid_cols)} ${getDesktopGridClass(S.layout_grid_cols)} ${mobileCardStyleClass} ${desktopCardStyleClass} gap-3 sm:gap-6 justify-items-center`;
 
   // === 12. 计算文本和统计信息 ===
   const headingPlainText = currentCatalogName ? `${currentCatalogName} · ${sites.length} 个书签` : `全部收藏 · ${sites.length} 个书签`;
@@ -235,10 +265,23 @@ export async function onRequest(context) {
   const headingDefaultAttr = escapeHTML(headingPlainText);
   const headingActiveAttr = catalogExists ? escapeHTML(currentCatalogName) : '';
   const submissionEnabled = String(env.ENABLE_PUBLIC_SUBMISSION) === 'true';
-  const submissionClass = submissionEnabled ? '' : 'hidden';
-  const siteName = '龍哥导航站';
+  const submissionClass = submissionEnabled ? '' : '!hidden';
+  const siteName = S.home_site_name || env.SITE_NAME || '灰色轨迹';
   const siteDescription = S.home_site_description || env.SITE_DESCRIPTION || '一个优雅、快速、易于部署的书签（网址）收藏与分享平台，完全基于 Cloudflare 全家桶构建';
-  const footerText = env.FOOTER_TEXT || '曾梦想仗剑走天涯';
+  const footerText = S.home_footer_text || env.FOOTER_TEXT || '曾梦想仗剑走天涯';
+  let footerFriendLinks = '';
+  try {
+    const friendLinks = JSON.parse(S.home_friend_links || '[]');
+    if (Array.isArray(friendLinks)) {
+      footerFriendLinks = friendLinks.slice(0, 8).map((item) => {
+        const label = escapeHTML(String(item?.name || '').trim().slice(0, 40));
+        const url = String(item?.url || '').trim();
+        if (!label || !/^https?:\/\//i.test(url)) return '';
+        return `<a href="${escapeHTML(url)}" target="_blank" rel="noopener noreferrer">${label}</a>`;
+      }).join('');
+    }
+  } catch (_) { footerFriendLinks = ''; }
+
   const titleStyle = getStyleStr(S.home_title_size, S.home_title_color, S.home_title_font);
   const subtitleStyle = getStyleStr(S.home_subtitle_size, S.home_subtitle_color, S.home_subtitle_font);
   const statsStyle = getStyleStr(S.home_stats_size, S.home_stats_color, S.home_stats_font);
@@ -254,7 +297,7 @@ export async function onRequest(context) {
         <label class="search-engine-option active" data-engine="local"><span>站内</span></label>
         <label class="search-engine-option" data-engine="google"><span>Google</span></label>
         <label class="search-engine-option" data-engine="baidu"><span>Baidu</span></label>
-        <label class="search-engine-option" data-engine="github"><span>GitHub</span></label>
+        <label class="search-engine-option" data-engine="github"><span>Github</span></label>
     </div>` : '';
 
   // === 14. Header HTML ===
@@ -262,40 +305,64 @@ export async function onRequest(context) {
   const safeSiteDesc = escapeHTML(siteDescription);
   const horizontalTitleHtml = S.layout_hide_title ? '' : `<h1 class="text-3xl md:text-4xl font-bold tracking-tight mb-3 ${titleColorClass}" ${titleStyle}>${safeSiteName}</h1>`;
   const horizontalSubtitleHtml = S.layout_hide_subtitle ? '' : `<p class="${subTextColorClass} opacity-90 text-sm md:text-base" ${subtitleStyle}>${safeSiteDesc}</p>`;
+  const normalizeCategoryPosition = (position, menuLayout) => {
+    if (position === 'above_description') return 'top';
+    if (['below_search', 'above_search', 'left', 'top'].includes(position)) return position;
+    return menuLayout === 'vertical' ? 'left' : 'below_search';
+  };
+  const categoryPosition = normalizeCategoryPosition(S.home_category_position, S.layout_menu_layout);
+  const isHorizontalCategoryLayout = categoryPosition !== 'left';
+  const categoryFlow = S.home_category_flow === 'multi_line' ? 'multi_line' : 'single_line';
+  // 分类行宽度 max-w-5xl（64rem），按钮 min-width: 4em+2rem，单行约 8 个
+  const horizontalCategoryNavShellClass = categoryPosition === 'top'
+    ? 'horizontal-category-nav-shell is-top relative mx-auto'
+    : 'horizontal-category-nav-shell relative mx-auto';
+  const horizontalCategoryNavJustifyClass = categoryFlow === 'multi_line' ? 'justify-start' : 'justify-center';
+  // 单行：nowrap + 宽度折叠（与预览一致）；多行：wrap 且无 more
+  const horizontalCategoryNavWrapClass = categoryFlow === 'multi_line' ? 'flex-wrap' : 'flex-nowrap';
+  // 单行也用 overflow-visible：overflow-hidden 会裁切多级下拉与「更多」弹出层
+  const horizontalCategoryNavOverflowClass = 'overflow-visible';
+  const horizontalCategoryNavFlowClass = categoryFlow === 'multi_line' ? 'is-multi-line' : 'is-single-line';
+  const horizontalMoreHtml = categoryFlow === 'multi_line' ? '' : `
+          <div id="horizontalMoreWrapper" class="relative hidden">
+            <button id="horizontalMoreBtn" class="nav-btn inactive">
+              <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path d="M6 10a2 2 0 11-4 0 2 2 0 014 0zM12 10a2 2 0 11-4 0 2 2 0 014 0zM16 12a2 2 0 100-4 2 2 0 000 4z" /></svg>
+            </button>
+            <div id="horizontalMoreDropdown" class="dropdown-menu hidden absolute mt-2 w-auto z-50"></div>
+          </div>`;
+  const horizontalCategoryNavHtml = `
+      <div class="${horizontalCategoryNavShellClass}">
+        <div id="horizontalCategoryNav" class="flex ${horizontalCategoryNavWrapClass} ${horizontalCategoryNavJustifyClass} items-center gap-3 ${horizontalCategoryNavOverflowClass} ${horizontalCategoryNavFlowClass} transition-all duration-300">
+          ${horizontalCatalogMarkup}
+          ${horizontalMoreHtml}
+        </div>
+      </div>`;
 
   const verticalHeaderContent = `
     <div class="max-w-4xl mx-auto text-center relative z-10 ${themeClass} py-8">
-      <div class="mb-8">${horizontalTitleHtml}${horizontalSubtitleHtml}</div>
-      <div class="relative max-w-xl mx-auto">
+      <div class="home-title-block mb-8">${horizontalTitleHtml}${horizontalSubtitleHtml}</div>
+      <div class="home-search-shell relative max-w-xl mx-auto">
         ${searchEngineOptions}
-        <div class="relative">
-          <input type="text" name="search" placeholder="搜索书签..." class="search-input-target w-full pl-12 pr-4 py-3.5 rounded-2xl transition-all shadow-lg outline-none focus:outline-none focus:ring-2 ${searchInputClass}" autocomplete="off">
-          <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 absolute left-4 top-3.5 ${searchIconClass}" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+        <div class="home-search-field relative">
+          <input type="search" placeholder="搜索书签..." class="search-input-target w-full pl-12 pr-4 py-3.5 rounded-2xl transition-all shadow-lg outline-none focus:outline-none focus:ring-2 ${searchInputClass}" autocomplete="new-password" autocapitalize="none" autocorrect="off" spellcheck="false" inputmode="search" enterkeyhint="search" aria-label="搜索书签" data-lpignore="true" data-1p-ignore="true" data-bwignore="true" data-form-type="other">
+          <svg xmlns="http://www.w3.org/2000/svg" class="home-search-icon h-6 w-6 absolute left-4 top-3.5 ${searchIconClass}" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
         </div>
       </div>
     </div>`;
 
   const horizontalHeaderContent = `
     <div class="max-w-5xl mx-auto text-center relative z-10 ${themeClass}">
-      <div class="max-w-4xl mx-auto mb-8">${horizontalTitleHtml}${horizontalSubtitleHtml}</div>
-      <div class="relative max-w-xl mx-auto mb-8">
+      ${categoryPosition === 'top' ? `<div class="category-nav-top-wrap">${horizontalCategoryNavHtml}</div>` : ''}
+      <div class="home-title-block max-w-4xl mx-auto mb-8">${horizontalTitleHtml}${horizontalSubtitleHtml}</div>
+      ${categoryPosition === 'above_search' ? `<div class="mb-8">${horizontalCategoryNavHtml}</div>` : ''}
+      <div class="home-search-shell relative max-w-xl mx-auto ${categoryPosition === 'below_search' ? 'mb-8' : ''}">
         ${searchEngineOptions}
-        <div class="relative">
-          <input id="headerSearchInput" type="text" name="search" placeholder="搜索书签..." class="search-input-target w-full pl-12 pr-4 py-3.5 rounded-2xl transition-all shadow-lg outline-none focus:outline-none focus:ring-2 ${searchInputClass}" autocomplete="off">
-          <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 absolute left-4 top-3.5 ${searchIconClass}" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+        <div class="home-search-field relative">
+          <input id="headerSearchInput" type="search" placeholder="搜索书签..." class="search-input-target w-full pl-12 pr-4 py-3.5 rounded-2xl transition-all shadow-lg outline-none focus:outline-none focus:ring-2 ${searchInputClass}" autocomplete="new-password" autocapitalize="none" autocorrect="off" spellcheck="false" inputmode="search" enterkeyhint="search" aria-label="搜索书签" data-lpignore="true" data-1p-ignore="true" data-bwignore="true" data-form-type="other">
+          <svg xmlns="http://www.w3.org/2000/svg" class="home-search-icon h-6 w-6 absolute left-4 top-3.5 ${searchIconClass}" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
         </div>
       </div>
-      <div class="relative max-w-5xl mx-auto">
-        <div id="horizontalCategoryNav" class="flex flex-wrap justify-center items-center gap-3 overflow-hidden transition-all duration-300" style="max-height: 60px;">
-          ${horizontalCatalogMarkup}
-          <div id="horizontalMoreWrapper" class="relative hidden">
-            <button id="horizontalMoreBtn" class="nav-btn inactive">
-              <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path d="M6 10a2 2 0 11-4 0 2 2 0 014 0zM12 10a2 2 0 11-4 0 2 2 0 014 0zM16 12a2 2 0 100-4 2 2 0 000 4z" /></svg>
-            </button>
-            <div id="horizontalMoreDropdown" class="dropdown-menu hidden absolute mt-2 w-auto z-50"></div>
-          </div>
-        </div>
-      </div>
+      ${categoryPosition === 'below_search' ? horizontalCategoryNavHtml : ''}
     </div>`;
 
   // === 15. 布局控制 ===
@@ -303,39 +370,25 @@ export async function onRequest(context) {
   let mainClass = 'lg:ml-64';
   let sidebarToggleClass = '';
   let mobileToggleVisibilityClass = 'lg:hidden';
-  let githubIconHtml = '';
   let adminIconHtml = '';
-  let submissionIconHtml = '';
   const themeIconHtml = `
-    <button id="themeToggleBtn" class="flex items-center justify-center p-2 rounded-lg bg-white/80 backdrop-blur shadow-md hover:bg-white text-gray-700 hover:text-amber-500 dark:bg-gray-800/80 dark:text-gray-200 dark:hover:text-yellow-300 transition-all cursor-pointer" title="切换主题">
+    <button id="themeToggleBtn" class="top-action-icon theme-action-icon" title="切换主题">
       <svg id="themeIconSun" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="block dark:hidden"><circle cx="12" cy="12" r="5"></circle><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"></path></svg>
       <svg id="themeIconMoon" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="hidden dark:block"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
     </button>`;
 
   let headerContent = verticalHeaderContent;
 
-  if (S.layout_menu_layout === 'horizontal') {
+  if (isHorizontalCategoryLayout) {
     sidebarClass = 'min-[550px]:hidden';
     mainClass = '';
     sidebarToggleClass = '!hidden';
     mobileToggleVisibilityClass = 'min-[550px]:hidden';
 
-    if (!S.home_hide_github) {
-      githubIconHtml = `
-        <a href="https://slink.661388.xyz/iori-nav" target="_blank" class="fixed top-4 left-4 z-50 hidden min-[550px]:flex items-center justify-center p-2 rounded-lg bg-white/80 backdrop-blur shadow-md hover:bg-white text-gray-700 hover:text-black dark:bg-gray-800/80 dark:text-gray-200 dark:hover:text-white transition-all" title="GitHub">
-          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4"></path><path d="M9 18c-4.51 2-5-2-7-2"></path></svg>
-        </a>`;
-    }
-    if (submissionEnabled) {
-      submissionIconHtml = `
-        <button type="button" id="addSiteBtnHorizontal" class="hidden min-[550px]:flex items-center justify-center p-2 rounded-lg bg-white/80 backdrop-blur shadow-md hover:bg-white text-gray-700 hover:text-accent-600 dark:bg-gray-800/80 dark:text-gray-200 dark:hover:text-accent-400 transition-all cursor-pointer" title="公开投稿">
-          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"></path></svg>
-        </button>`;
-    }
     if (!S.home_hide_admin) {
       adminIconHtml = `
-        <a href="/admin" target="_blank" class="flex items-center justify-center p-2 rounded-lg bg-white/80 backdrop-blur shadow-md hover:bg-white text-gray-700 hover:text-primary-600 dark:bg-gray-800/80 dark:text-gray-200 dark:hover:text-primary-400 transition-all" title="后台管理">
-          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M12 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/><path d="M7 18a5 5 0 0 1 10 0"/></path></svg>
+        <a href="/admin" target="_blank" class="top-action-icon admin-action-icon" title="后台管理">
+          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M12 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/><path d="M7 18a5 5 0 0 1 10 0"/></svg>
         </a>`;
     }
 
@@ -344,21 +397,17 @@ export async function onRequest(context) {
       <div class="hidden min-[550px]:block">${horizontalHeaderContent}</div>`;
   }
 
-  const topRightActionsHtml = `<div class="fixed top-4 right-4 z-50 flex items-center gap-3">${submissionIconHtml}${themeIconHtml}${adminIconHtml}</div>`;
-  // 用户要求移除左上角 GitHub 图标，保留原有导航/侧边栏控制。
-  githubIconHtml = '';
-
+  const topRightActionsHtml = `<div class="fixed top-4 right-4 z-50 flex items-center gap-3">${themeIconHtml}${adminIconHtml}</div>`;
   const leftTopActionHtml = `
     <div class="fixed top-4 left-4 z-50 ${mobileToggleVisibilityClass}">
       <button id="sidebarToggle" class="p-2 rounded-lg bg-white dark:bg-gray-800 shadow-md hover:bg-gray-100 dark:hover:bg-gray-700">
         <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-primary-500 dark:text-primary-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" /></svg>
       </button>
-    </div>
-    ${githubIconHtml}`;
+    </div>`;
 
   const footerClass = isCustomWallpaper
-    ? 'bg-transparent py-8 px-6 mt-12 border-none shadow-none text-black dark:text-gray-200'
-    : 'bg-white py-8 px-6 mt-12 border-t border-primary-100 dark:bg-gray-900 dark:border-gray-800 dark:text-gray-400';
+    ? 'bg-transparent py-8 px-6 mt-12 border-none shadow-none'
+    : 'bg-white py-8 px-6 mt-12 border-t border-primary-100 dark:bg-gray-900 dark:border-gray-800';
   const hitokotoClass = (isCustomWallpaper ? 'text-black dark:text-gray-200' : 'text-gray-500 dark:text-gray-400') + ' ml-auto';
 
   // === 16. 模板注入 ===
@@ -368,16 +417,15 @@ export async function onRequest(context) {
   let headInjections = '';
 
   // 注入隐藏图标的 CSS
-  if (S.home_hide_github || S.home_hide_admin) {
+  if (S.home_hide_admin) {
     let hideIconsCss = '<style>';
-    if (S.home_hide_github) hideIconsCss += 'a[title="GitHub"] { display: none !important; }';
     if (S.home_hide_admin) hideIconsCss += 'a[href^="/admin"] { display: none !important; }';
     hideIconsCss += '</style>';
     headInjections += hideIconsCss;
   }
 
   // 背景层 HTML
-  const safeWallpaperUrl = sanitizeUrl(S.layout_custom_wallpaper);
+  const safeWallpaperUrl = sanitizeUrl(resolvedWallpaperUrl);
   const defaultBgColor = '#fdf8f3';
   let bgLayerHtml = '';
   if (safeWallpaperUrl) {
@@ -402,9 +450,11 @@ export async function onRequest(context) {
   </style>`;
 
   // CSS 变量
-  const cardRadius = parseInt(S.layout_card_border_radius) || 12;
-  const frostedBlur = String(S.layout_frosted_glass_intensity || '15').replace(/[^0-9]/g, '') || '15';
-  headInjections += `<style>:root { --card-padding: 1.25rem; --card-radius: ${cardRadius}px; --frosted-glass-blur: ${frostedBlur}px; }</style>`;
+  const cardRadius = normalizeCssPixelValue(S.layout_card_border_radius, 12);
+  const mobileCardRadius = normalizeCssPixelValue(S.mobile_layout_card_border_radius, cardRadius);
+  const frostedBlur = normalizeCssPixelValue(S.layout_frosted_glass_intensity, 15);
+  const mobileFrostedBlur = normalizeCssPixelValue(S.mobile_layout_frosted_glass_intensity, frostedBlur);
+  headInjections += `<style>:root { --card-padding: 1.25rem; --card-radius: ${cardRadius}px; --frosted-glass-blur: ${frostedBlur}px; }@media (max-width: 767px) { :root { --card-radius: ${mobileCardRadius}px; --frosted-glass-blur: ${mobileFrostedBlur}px; } }</style>`;
 
   // 自定义字体
   const usedFonts = new Set();
@@ -414,6 +464,8 @@ export async function onRequest(context) {
   if (!S.home_hide_hitokoto && S.home_hitokoto_font) usedFonts.add(S.home_hitokoto_font);
   if (S.card_title_font) usedFonts.add(S.card_title_font);
   if (S.card_desc_font) usedFonts.add(S.card_desc_font);
+  if (S.mobile_card_title_font) usedFonts.add(S.mobile_card_title_font);
+  if (S.mobile_card_desc_font) usedFonts.add(S.mobile_card_desc_font);
 
   let fontLinksHtml = '';
   let needsFontPreconnect = false;
@@ -446,38 +498,54 @@ export async function onRequest(context) {
 
   // 卡片自定义字体 CSS
   let customCardCss = '';
-  if (S.card_title_font || S.card_title_size || S.card_title_color) {
-    const s = getStyleStr(S.card_title_size, S.card_title_color, S.card_title_font).replace('style="', '').replace('"', '');
-    if (s) customCardCss += `.site-title { ${s} }`;
+  const desktopCardTitleStyle = getStyleStr(S.card_title_size, S.card_title_color, S.card_title_font).replace('style="', '').replace('"', '');
+  const mobileCardTitleStyle = getStyleStr(S.mobile_card_title_size, S.mobile_card_title_color, S.mobile_card_title_font).replace('style="', '').replace('"', '');
+  const desktopCardTitleColor = sanitizeStyleColor(S.card_title_color);
+  const mobileCardTitleColor = sanitizeStyleColor(S.mobile_card_title_color);
+  const desktopCardDescStyle = getStyleStr(S.card_desc_size, S.card_desc_color, S.card_desc_font).replace('style="', '').replace('"', '');
+  const mobileCardDescStyle = getStyleStr(S.mobile_card_desc_size, S.mobile_card_desc_color, S.mobile_card_desc_font).replace('style="', '').replace('"', '');
+  if (desktopCardTitleStyle || mobileCardTitleStyle) {
+    if (desktopCardTitleStyle) customCardCss += `@media (min-width: 768px) { .site-title { ${desktopCardTitleStyle} } }`;
+    if (mobileCardTitleStyle) customCardCss += `@media (max-width: 767px) { .site-title { ${mobileCardTitleStyle} } }`;
   }
-  if (S.card_desc_font || S.card_desc_size || S.card_desc_color) {
-    const s = getStyleStr(S.card_desc_size, S.card_desc_color, S.card_desc_font).replace('style="', '').replace('"', '');
-    if (s) customCardCss += `.site-card p { ${s} }`;
+  if (desktopCardTitleColor) customCardCss += `@media (min-width: 768px) { body { --desktop-card-title-color: ${desktopCardTitleColor}; } }`;
+  if (mobileCardTitleColor) customCardCss += `@media (max-width: 767px) { body { --mobile-card-title-color: ${mobileCardTitleColor}; } }`;
+  if (desktopCardDescStyle || mobileCardDescStyle) {
+    if (desktopCardDescStyle) customCardCss += `@media (min-width: 768px) { .site-card p { ${desktopCardDescStyle} } }`;
+    if (mobileCardDescStyle) customCardCss += `@media (max-width: 767px) { .site-card p { ${mobileCardDescStyle} } }`;
   }
   if (customCardCss) headInjections += `<style>${customCardCss}</style>`;
 
-  // 全局站点数据与布局配置：SQL 已精简字段，直接序列化无需再拷贝
-  // 两者都挪到 </body> 前注入（见下方 replace），避免阻塞 <head> 解析
-  const safeSitesJson = JSON.stringify(allSites).replace(/</g, '\\u003c');
+  // 全局站点卡片视图模型与布局配置：直接序列化后注入到 main.js 之前
+  const cardHydrationState = buildCardHydrationState(allSites, S);
+  const safeSitesJson = JSON.stringify(cardHydrationState.cards).replace(/</g, '\\u003c');
+  const safeCardConfigJson = JSON.stringify(cardHydrationState.config).replace(/</g, '\\u003c');
+  const safeCardConfigsJson = JSON.stringify(cardHydrationState.configs).replace(/</g, '\\u003c');
   const safeLayoutConfigJson = JSON.stringify({
     hideDesc: S.layout_hide_desc,
     hideLinks: S.layout_hide_links,
     hideCategory: S.layout_hide_category,
     gridCols: S.layout_grid_cols,
     cardStyle: S.layout_card_style,
+    cardAnimation: S.layout_card_animation,
     enableFrostedGlass: S.layout_enable_frosted_glass,
     rememberLastCategory: S.home_remember_last_category,
     // 当前 SSR 已渲染的分类（用于前端 Auto-restore 判断是否可跳过重绘）
-    ssrCatalogId: catalogExists ? categoryIdMap.get(requestedCatalogName) : 'all',
+    ssrCatalogId: catalogExists ? requestedCatalogId : 'all',
   }).replace(/</g, '\\u003c');
 
   // --- 一次性替换 </head> ---
   html = html.replace('</head>', headInjections + '</head>');
 
   // 替换 body 标签 + 滚动容器
+  const pageStyleClasses = [
+    S.layout_card_style === 'style3' ? 'desktop-page-style3' : '',
+    S.mobile_layout_card_style === 'style3' ? 'mobile-page-style3' : '',
+    `category-pos-${categoryPosition}`,
+  ].filter(Boolean).join(' ');
   html = html.replace(
     '<body class="bg-secondary-50 font-sans text-gray-800">',
-    `<body class="bg-secondary-50 dark:bg-gray-900 font-sans text-gray-800 dark:text-gray-100 relative ${isCustomWallpaper ? 'custom-wallpaper' : ''}">${bgLayerHtml}<div id="app-scroll">`
+    `<body class="bg-secondary-50 dark:bg-gray-900 font-sans text-gray-800 dark:text-gray-100 relative ${isCustomWallpaper ? 'custom-wallpaper' : ''} ${pageStyleClasses}">${bgLayerHtml}<div id="app-scroll">`
   );
   html = html.replace('</body>', '</div></body>');
 
@@ -486,11 +554,11 @@ export async function onRequest(context) {
   // - 函数形式 replacement：规避用户数据中可能含 $&、$1 等被当作 back-reference
   const mainJsMarker = '<script src="/js/main.js';
   if (!html.includes(mainJsMarker)) {
-    console.error('IORI_SITES injection skipped: main.js marker not found in template');
+    console.error('Card hydration injection skipped: main.js marker not found in template');
   } else {
     html = html.replace(
       mainJsMarker,
-      () => `<script>window.IORI_SITES=${safeSitesJson};window.IORI_LAYOUT_CONFIG=${safeLayoutConfigJson};</script>\n  ${mainJsMarker}`
+      () => `<script>window.IORI_SITES=${safeSitesJson};window.IORI_CARD_CONFIG=${safeCardConfigJson};window.IORI_CARD_CONFIGS=${safeCardConfigsJson};window.IORI_LAYOUT_CONFIG=${safeLayoutConfigJson};</script>\n  ${mainJsMarker}`
     );
   }
 
@@ -510,6 +578,7 @@ export async function onRequest(context) {
     'CANONICAL_URL': escapeHTML(canonicalUrl),
     'OG_IMAGE_URL': escapeHTML(ogImageUrl),
     'FOOTER_TEXT': escapeHTML(footerText),
+    'FOOTER_FRIEND_LINKS': footerFriendLinks,
     'CATALOG_EXISTS': catalogExists ? 'true' : 'false',
     'CATALOG_LINKS': catalogLinkMarkup,
     'SUBMISSION_CLASS': submissionClass,

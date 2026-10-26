@@ -9,6 +9,11 @@ export async function onRequestPost(context) {
     return errorResponse('Unauthorized', 401);
   }
 
+  // 分块提交属于多事务写入，中途失败会留下部分变更。打脏标记统一放在 finally：
+  // KV 对同一个 key 限制每秒一次写入，同一请求内写两次可能被静默丢弃，
+  // 而 finally 一次就能覆盖成功、抛错和校验早返回三种出口。
+  let dbMayHaveChanged = false;
+
   try {
     const { items } = await request.json();
 
@@ -33,11 +38,10 @@ export async function onRequestPost(context) {
       );
     }
 
+    dbMayHaveChanged = true;
     for (let i = 0; i < statements.length; i += REORDER_CHUNK_SIZE) {
       await env.NAV_DB.batch(statements.slice(i, i + REORDER_CHUNK_SIZE));
     }
-
-    await markHomeCacheDirty(env, 'all');
 
     return jsonResponse({
       code: 200,
@@ -45,5 +49,9 @@ export async function onRequestPost(context) {
     });
   } catch (e) {
     return errorResponse(`保存分类排序失败: ${e.message}`, 500);
+  } finally {
+    if (dbMayHaveChanged) {
+      await markHomeCacheDirty(env, 'all');
+    }
   }
 }

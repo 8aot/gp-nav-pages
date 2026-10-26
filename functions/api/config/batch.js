@@ -8,6 +8,12 @@ export async function onRequestPost(context) {
     return errorResponse('Unauthorized', 401);
   }
 
+  // reorder 之外的操作都是单次 env.NAV_DB.batch()（D1 隐式单事务），失败即全无变更，
+  // 成功后就地打一次脏标记即可。reorder 分块提交属于多事务写入，改用 finally 打标：
+  // KV 对同一个 key 限制每秒一次写入，同一请求内写两次可能被静默丢弃，
+  // 而 finally 一次就能覆盖成功与抛错两种出口。
+  let dbMayHaveChanged = false;
+
   try {
     const { action, ids, payload } = await request.json();
 
@@ -124,11 +130,10 @@ export async function onRequestPost(context) {
         );
       }
 
+      dbMayHaveChanged = true;
       for (let i = 0; i < reorderStatements.length; i += REORDER_CHUNK_SIZE) {
         await env.NAV_DB.batch(reorderStatements.slice(i, i + REORDER_CHUNK_SIZE));
       }
-
-      await markHomeCacheDirty(env, 'all');
 
       return jsonResponse({
         code: 200,
@@ -140,5 +145,9 @@ export async function onRequestPost(context) {
 
   } catch (e) {
     return errorResponse(`批量操作失败: ${e.message}`, 500);
+  } finally {
+    if (dbMayHaveChanged) {
+      await markHomeCacheDirty(env, 'all');
+    }
   }
 }

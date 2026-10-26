@@ -19,8 +19,8 @@ function _renderHorizontalItems(cats, currentCatalogName, level) {
         const isActive = currentCatalogName === cat.catelog;
         const hasChildren = cat.children && cat.children.length > 0;
         const safeName = escapeHTML(cat.catelog);
-        const encodedName = encodeURIComponent(cat.catelog);
-        const linkUrl = `?catalog=${encodedName}`;
+        const catalogParam = encodeURIComponent(String(cat.id));
+        const linkUrl = `?catalog=${catalogParam}`;
 
         const isRoot = level === 0;
         const activeClass = isActive ? 'active' : (isRoot ? 'inactive' : '');
@@ -52,7 +52,7 @@ export function renderVerticalMenu(cats, currentCatalogName, isCustomWallpaper) 
 function _renderVerticalItems(cats, currentCatalogName, isCustomWallpaper, level) {
     return cats.map(cat => {
         const safeName = escapeHTML(cat.catelog);
-        const encodedName = encodeURIComponent(cat.catelog);
+        const catalogParam = encodeURIComponent(String(cat.id));
         const isActive = currentCatalogName === cat.catelog;
 
         const baseClass = "flex items-center px-3 py-2 rounded-lg w-full transition-colors duration-200";
@@ -64,7 +64,7 @@ function _renderVerticalItems(cats, currentCatalogName, isCustomWallpaper, level
         const indent = level * 12;
 
         let html = `
-      <a href="?catalog=${encodedName}" data-id="${cat.id}" class="${baseClass} ${activeClass}" style="padding-left: ${12 + indent}px">
+      <a href="?catalog=${catalogParam}" data-id="${cat.id}" data-protected="${cat.password_protected ? '1' : '0'}" class="${baseClass} ${activeClass}" style="padding-left: ${12 + indent}px">
           <svg class="h-5 w-5 mr-2 ${iconClass}"><use href="#icon-folder"/></svg>
           ${safeName}
       </a>`;

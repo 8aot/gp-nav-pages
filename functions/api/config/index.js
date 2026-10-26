@@ -1,6 +1,11 @@
 // functions/api/config/index.js
 import { isAdminAuthenticated, errorResponse, jsonResponse, normalizeSortOrder, markHomeCacheDirty } from '../../_middleware';
 import { escapeLikePattern, buildFaviconUrl, getUrlMatchCandidates, normalizeUrlForStorage, parsePagination } from '../../lib/utils';
+import { normalizeBookmarkDesc, normalizeBookmarkLogo, normalizeBookmarkName, normalizeBookmarkUrl } from '../../lib/validators';
+
+const MAX_CONFIG_SEARCH_KEYWORD_LENGTH = 100;
+const MAX_PUBLIC_PAGE_SIZE = 200;
+const MAX_ADMIN_PAGE_SIZE = 10000;
 
 export async function onRequestGet(context) {
   const { request, env } = context;
@@ -8,11 +13,17 @@ export async function onRequestGet(context) {
   const url = new URL(request.url);
   const catalog = url.searchParams.get('catalog');
   const catalogId = url.searchParams.get('catalogId');
-  const { page, pageSize, offset } = parsePagination(url.searchParams, { maxPageSize: 200 });
-  const keyword = url.searchParams.get('keyword');
+  const keyword = (url.searchParams.get('keyword') || '').trim();
+
+  if (keyword.length > MAX_CONFIG_SEARCH_KEYWORD_LENGTH) {
+    return errorResponse(`搜索关键词不能超过 ${MAX_CONFIG_SEARCH_KEYWORD_LENGTH} 个字符`, 400);
+  }
 
   const isAuthenticated = await isAdminAuthenticated(request, env);
   const includePrivate = isAuthenticated ? 1 : 0;
+  // 与 categories/index.js 一致：管理员可一次拉全量（后台「全部」与跨页拖拽排序依赖），匿名仍限 200
+  const maxPageSize = isAuthenticated ? MAX_ADMIN_PAGE_SIZE : MAX_PUBLIC_PAGE_SIZE;
+  const { page, pageSize, offset } = parsePagination(url.searchParams, { maxPageSize });
 
   try {
     // 基础查询：不再关联 category，直接查 sites 表，提高性能
@@ -68,16 +79,28 @@ export async function onRequestPost(context) {
     const { name, url, logo, desc, catelogId, sort_order, is_private } = config;
     const iconAPI = env.ICON_API || 'https://faviconsnap.com/api/favicon?url=';
 
-    const sanitizedName = (name || '').trim();
-    const rawUrl = (url || '').trim();
+    const nameResult = normalizeBookmarkName(name);
+    if (!nameResult.ok) return errorResponse(nameResult.message, 400);
+
+    const urlResult = normalizeBookmarkUrl(url);
+    if (!urlResult.ok) return errorResponse(urlResult.message, 400);
+
+    const logoResult = normalizeBookmarkLogo(logo, { nullIfEmpty: true });
+    if (!logoResult.ok) return errorResponse(logoResult.message, 400);
+
+    const descResult = normalizeBookmarkDesc(desc, { nullIfEmpty: true });
+    if (!descResult.ok) return errorResponse(descResult.message, 400);
+
+    const sanitizedName = nameResult.value;
+    const rawUrl = urlResult.value;
     const sanitizedUrl = normalizeUrlForStorage(rawUrl);
-    let sanitizedLogo = (logo || '').trim() || null;
-    const sanitizedDesc = (desc || '').trim() || null;
+    let sanitizedLogo = logoResult.value;
+    const sanitizedDesc = descResult.value;
     const sortOrderValue = normalizeSortOrder(sort_order);
     const isPrivateValue = is_private ? 1 : 0;
 
-    if (!sanitizedName || !rawUrl || !catelogId) {
-      return errorResponse('Name, URL and Catelog are required', 400);
+    if (!catelogId) {
+      return errorResponse('Catelog is required', 400);
     }
 
     if (!sanitizedUrl) {

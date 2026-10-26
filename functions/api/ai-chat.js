@@ -1,4 +1,182 @@
 import { isAdminAuthenticated, errorResponse, jsonResponse } from '../_middleware';
+import { resolveWorkersAiModel } from '../lib/workers-ai-models';
+
+function getMessageContentText(content) {
+    if (typeof content === 'string') return content;
+    if (!Array.isArray(content)) return '';
+
+    return content
+        .map(part => {
+            if (typeof part === 'string') return part;
+            if (typeof part?.text === 'string') return part.text;
+            return '';
+        })
+        .join('');
+}
+
+function extractWorkersAiText(response) {
+    if (typeof response === 'string') return response;
+    if (!response || typeof response !== 'object') return '';
+
+    if (typeof response.response === 'string') {
+        return response.response;
+    }
+
+    const choiceContent = response.choices?.[0]?.message?.content;
+    const choiceText = getMessageContentText(choiceContent);
+    if (choiceText) return choiceText;
+
+    if (typeof response.result?.response === 'string') {
+        return response.result.response;
+    }
+
+    return '';
+}
+
+function stripMarkdownFence(text) {
+    return String(text || '')
+        .replace(/```(?:json)?/gi, '')
+        .replace(/```/g, '')
+        .trim();
+}
+
+function stripEnclosingQuotes(text) {
+    return String(text || '')
+        .trim()
+        .replace(/^[\s"'“”‘’`]+/, '')
+        .replace(/[\s"'“”‘’`]+$/, '')
+        .trim();
+}
+
+function sanitizeDescriptionCandidate(candidate) {
+    return stripEnclosingQuotes(candidate)
+        .replace(/^(?:[-*•]|\d+[.)、])\s*/, '')
+        .replace(/^(?:最终(?:答案|描述|结果)|答案|描述|简介|Selected description)\s*[:：]\s*/i, '')
+        .trim();
+}
+
+function isLikelyDescription(candidate) {
+    const text = sanitizeDescriptionCandidate(candidate);
+    if (!text || text.length < 4 || text.length > 80) return false;
+    if (/https?:\/\//i.test(text)) return false;
+    if (!/[\u4e00-\u9fffA-Za-z]/.test(text)) return false;
+    if (/(我需要|首先|然后|接下来|因此|可能|假设|分析|检查字数|用户|书签名称|链接是|不超过|生成|例如|或者|考虑到|所以)/.test(text)) {
+        return false;
+    }
+    return true;
+}
+
+function parseJsonDescription(text) {
+    try {
+        const parsed = JSON.parse(stripMarkdownFence(text));
+        if (typeof parsed?.description === 'string') {
+            return sanitizeDescriptionCandidate(parsed.description);
+        }
+    } catch {
+        // Not JSON; continue with text extraction.
+    }
+    return '';
+}
+
+function normalizeBookmarkJson(parsed) {
+    if (!parsed || typeof parsed !== 'object' || typeof parsed.description !== 'string') {
+        return '';
+    }
+
+    const name = stripEnclosingQuotes(parsed.name || '');
+    const description = sanitizeDescriptionCandidate(parsed.description);
+    if (!description) return '';
+
+    return JSON.stringify({
+        name: name.slice(0, 20),
+        description,
+    });
+}
+
+function extractBookmarkJson(text) {
+    const content = stripMarkdownFence(text).replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+
+    try {
+        const normalized = normalizeBookmarkJson(JSON.parse(content));
+        if (normalized) return normalized;
+    } catch {
+        // Not a standalone JSON object; try to find one in the response text.
+    }
+
+    const matches = content.match(/\{[\s\S]*?\}/g) || [];
+    for (let i = matches.length - 1; i >= 0; i--) {
+        try {
+            const normalized = normalizeBookmarkJson(JSON.parse(matches[i]));
+            if (normalized) return normalized;
+        } catch {
+            // Keep scanning earlier JSON-looking fragments.
+        }
+    }
+
+    return '';
+}
+
+function extractLabeledDescription(text) {
+    const pattern = /(?:最终(?:答案|描述|结果)|答案|描述|简介|Selected description)\s*[:：]\s*([^\n]+)/gi;
+    let match;
+    let candidate = '';
+
+    while ((match = pattern.exec(text)) !== null) {
+        candidate = match[1];
+    }
+
+    candidate = sanitizeDescriptionCandidate(candidate);
+    return isLikelyDescription(candidate) ? candidate : '';
+}
+
+function extractQuotedDescription(text) {
+    const pattern = /["“‘]([^"”’\n]{4,80})["”’]?/g;
+    let match;
+    let candidate = '';
+
+    while ((match = pattern.exec(text)) !== null) {
+        const value = sanitizeDescriptionCandidate(match[1]);
+        if (isLikelyDescription(value)) {
+            candidate = value;
+        }
+    }
+
+    return candidate;
+}
+
+function extractLineDescription(text) {
+    const lines = text
+        .split(/\r?\n/)
+        .map(line => sanitizeDescriptionCandidate(line))
+        .filter(Boolean);
+
+    for (let i = lines.length - 1; i >= 0; i--) {
+        if (isLikelyDescription(lines[i])) return lines[i];
+    }
+
+    return '';
+}
+
+function extractBookmarkDescription(text) {
+    const content = stripMarkdownFence(text).replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+    const wholeContent = sanitizeDescriptionCandidate(content);
+
+    return parseJsonDescription(content)
+        || extractLabeledDescription(content)
+        || extractQuotedDescription(content)
+        || extractLineDescription(content)
+        || (isLikelyDescription(wholeContent) ? wholeContent : '');
+}
+
+function formatAiContent(content, responseFormat) {
+    if (responseFormat === 'bookmark-description') {
+        return extractBookmarkDescription(content);
+    }
+    if (responseFormat === 'bookmark-json') {
+        return extractBookmarkJson(content);
+    }
+    return content;
+}
 
 export async function onRequestPost(context) {
     const { request, env } = context;
@@ -9,7 +187,7 @@ export async function onRequestPost(context) {
     }
 
     try {
-        const { messages } = await request.json();
+        const { messages, responseFormat } = await request.json();
 
         if (!messages || !Array.isArray(messages)) {
             return errorResponse('Messages array is required', 400);
@@ -38,12 +216,16 @@ export async function onRequestPost(context) {
             if (!env.AI) {
                 return errorResponse('Workers AI binding (env.AI) not found', 500);
             }
-            // Workers AI 使用环境变量或固定模型
-            const workerModel = env.WORKERS_AI_MODEL || '@cf/mistralai/mistral-small-3.1-24b-instruct';
+            // Workers AI 优先使用后台保存的模型，环境变量作为部署级兜底。
+            const workerModel = resolveWorkersAiModel(model, env.WORKERS_AI_MODEL);
             const response = await env.AI.run(workerModel, { messages });
+            const content = formatAiContent(extractWorkersAiText(response), responseFormat);
+            if (!content) {
+                return errorResponse('Workers AI response did not include generated content', 500);
+            }
             return jsonResponse({
                 code: 200,
-                data: response.response || response
+                data: content
             });
 
         } else if (provider === 'openai') {
@@ -70,7 +252,7 @@ export async function onRequestPost(context) {
             }
 
             const data = await aiResponse.json();
-            const content = data.choices?.[0]?.message?.content || '';
+            const content = formatAiContent(data.choices?.[0]?.message?.content || '', responseFormat);
             return jsonResponse({
                 code: 200,
                 data: content
@@ -113,7 +295,7 @@ export async function onRequestPost(context) {
             }
 
             const data = await aiResponse.json();
-            const content = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+            const content = formatAiContent(data.candidates?.[0]?.content?.parts?.[0]?.text || '', responseFormat);
 
             return jsonResponse({
                 code: 200,

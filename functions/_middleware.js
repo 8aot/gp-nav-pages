@@ -3,6 +3,8 @@
 import { ensureSchemaReady } from './lib/schema-migration';
 import { HOME_CACHE_VERSION, HOME_CACHE_TTL } from './constants';
 
+export const GRAPH_CACHE_GENERATION_KEY = 'graph_cache_generation';
+
 export function normalizeSortOrder(val) {
   const num = Number(val);
   return Number.isFinite(num) ? num : 9999;
@@ -67,15 +69,12 @@ export async function clearHomeCache(env, scope = 'all') {
   try {
     const keys = [];
 
-    // TODO(2026-04-27): 旧版裸 key 'home_html_public' / 'home_html_private'
-    // 自 aa166bd (2026-03-27) 起已不再写入，30 天 TTL 于 2026-04-26 自然过期。
-    // 届时可删除下方两处裸 key，仅保留 getHomeCacheKey() 版本化 key。
     if (scope === 'all' || scope === 'public') {
-      keys.push('home_html_public', getHomeCacheKey('public'));
+      keys.push(getHomeCacheKey('public'));
     }
 
     if (scope === 'all' || scope === 'private') {
-      keys.push('home_html_private', getHomeCacheKey('private'));
+      keys.push(getHomeCacheKey('private'));
     }
 
     await Promise.all(keys.map(key => env.NAV_AUTH.delete(key)));
@@ -84,7 +83,62 @@ export async function clearHomeCache(env, scope = 'all') {
   }
 }
 
+export async function clearGraphCache(env) {
+  const generation = crypto.randomUUID();
+
+  // KV 对同一个 key 有每秒一次写入限制。generation 元数据放在 D1，避免
+  // 多个后台写请求同时失效图谱缓存时，固定 KV key 的写入被限流丢弃。
+  if (env?.NAV_DB && typeof env.NAV_DB.prepare === 'function') {
+    try {
+      await env.NAV_DB
+        .prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)')
+        .bind(GRAPH_CACHE_GENERATION_KEY, generation)
+        .run();
+    } catch (e) {
+      console.warn('Failed to clear graph cache:', e);
+    }
+    // 生产环境存在 D1 时，写入失败不能回退到 KV：否则仍可能读到旧 generation。
+    return;
+  }
+
+  // 仅兼容没有 D1 绑定的测试/旧运行环境。
+  if (!env?.NAV_AUTH || typeof env.NAV_AUTH.put !== 'function') return;
+  try {
+    await env.NAV_AUTH.put(GRAPH_CACHE_GENERATION_KEY, generation);
+  } catch (e) {
+    console.warn('Failed to clear graph cache:', e);
+  }
+}
+
+export async function getGraphCacheGeneration(env) {
+  if (env?.NAV_DB && typeof env.NAV_DB.prepare === 'function') {
+    try {
+      const result = await env.NAV_DB
+        .prepare('SELECT value FROM settings WHERE key = ?')
+        .bind(GRAPH_CACHE_GENERATION_KEY)
+        .first();
+      return result?.value || '0';
+    } catch (e) {
+      console.warn('Failed to read graph cache generation:', e);
+      // D1 可用但 generation 读取失败时跳过缓存，不能回退到旧 KV 指针。
+      return null;
+    }
+  }
+
+  if (!env?.NAV_AUTH || typeof env.NAV_AUTH.get !== 'function') return null;
+  try {
+    return (await env.NAV_AUTH.get(GRAPH_CACHE_GENERATION_KEY)) || '0';
+  } catch (e) {
+    console.warn('Failed to read graph cache generation:', e);
+    return null;
+  }
+}
+
 export async function markHomeCacheDirty(env, scope = 'all') {
+  // 先轮换图谱 generation，再写首页 dirty 标记，确保所有缓存元数据更新都发生在
+  // 首页脏标记之前；这样首页渲染的 CAS 清理不会覆盖刚发生的数据变更。
+  await clearGraphCache(env);
+
   try {
     const keys = [];
     const dirtyValue = crypto.randomUUID();
@@ -97,9 +151,9 @@ export async function markHomeCacheDirty(env, scope = 'all') {
       keys.push(getHomeDirtyKey('private'));
     }
 
-    for (const key of keys) {
-      await env.NAV_AUTH.put(key, dirtyValue, { expirationTtl: HOME_CACHE_TTL });
-    }
+    await Promise.all(
+      keys.map(key => env.NAV_AUTH.put(key, dirtyValue, { expirationTtl: HOME_CACHE_TTL }))
+    );
   } catch (e) {
     console.error('Failed to mark home cache dirty:', e);
   }

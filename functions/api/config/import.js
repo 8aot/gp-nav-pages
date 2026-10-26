@@ -1,6 +1,53 @@
 // functions/api/config/import.js
 import { isAdminAuthenticated, errorResponse, jsonResponse, normalizeSortOrder, markHomeCacheDirty } from '../../_middleware';
 import { getUrlMatchCandidates, normalizeUrlForStorage } from '../../lib/utils';
+import {
+    normalizeBookmarkDesc,
+    normalizeBookmarkLogo,
+    normalizeBookmarkName,
+    normalizeBookmarkUrl,
+    normalizeCategoryName,
+    IMPORT_BODY_MAX_BYTES,
+    IMPORT_BODY_MAX_MB,
+    validateImportSizes,
+} from '../../lib/validators';
+
+function getImportIdKey(value) {
+    return String(value ?? '');
+}
+
+function getImportParentIdKey(value) {
+    const key = getImportIdKey(value);
+    return key === '' ? '0' : key;
+}
+
+function buildPrivateDescendantStatements(db, categoryId) {
+    const descendantsCte = `
+      WITH RECURSIVE descendants(id) AS (
+        SELECT id FROM category WHERE id = ?
+        UNION ALL
+        SELECT c.id FROM category c
+        INNER JOIN descendants d ON c.parent_id = d.id
+      )
+    `;
+
+    return [
+        db.prepare(`
+          ${descendantsCte}
+          UPDATE category
+          SET is_private = 1
+          WHERE id IN (SELECT id FROM descendants)
+        `).bind(categoryId),
+        db.prepare(`
+          ${descendantsCte}
+          UPDATE sites
+          SET is_private = 1
+          WHERE catelog_id IN (SELECT id FROM descendants)
+        `).bind(categoryId),
+    ];
+}
+
+const ROOT_IMPORT_CATEGORY_NAME = '默认';
 
 export async function onRequestPost(context) {
   const { request, env } = context;
@@ -9,11 +56,19 @@ export async function onRequestPost(context) {
     return errorResponse('Unauthorized', 401);
   }
 
+  // 导入会分多次 db.batch()/run() 提交，属于多事务写入：中途失败时数据库已部分变更。
+  // 打脏标记统一放在 finally 里执行一次，原因有两点：
+  //   1. KV 对同一个 key 限制每秒一次写入，超频的后续写入可能被静默丢弃，
+  //      因此同一请求内不能对同一个 dirty key 写两次；
+  //   2. finally 能同时覆盖成功、抛错和参数校验早返回三种出口。
+  // 这里的标志表示「数据库可能已变更」，在每次写库前置位，好让中途失败也能被标记。
+  let dbMayHaveChanged = false;
+
   try {
-    // 限制请求体大小（最大 5MB）
+    // 限制请求体大小
     const contentLength = parseInt(request.headers.get('Content-Length') || '0', 10);
-    if (contentLength > 5 * 1024 * 1024) {
-      return errorResponse('请求体过大，最大允许 5MB', 413);
+    if (contentLength > IMPORT_BODY_MAX_BYTES) {
+      return errorResponse(`请求体过大，最大允许 ${IMPORT_BODY_MAX_MB}MB`, 413);
     }
 
     const jsonData = await request.json();
@@ -44,7 +99,12 @@ export async function onRequestPost(context) {
       return errorResponse('Invalid JSON format. Expected { "category": [...], "sites": [...] } or an array of sites.', 400);
     }
 
-    if (sitesToImport.length === 0) {
+    const importSizeCheck = validateImportSizes(categoriesToImport, sitesToImport);
+    if (!importSizeCheck.ok) {
+      return errorResponse(importSizeCheck.message, 400);
+    }
+
+    if (sitesToImport.length === 0 && categoriesToImport.length === 0) {
       return jsonResponse({ code: 200, message: 'Import successful, but no sites were found to import.' });
     }
 
@@ -53,10 +113,11 @@ export async function onRequestPost(context) {
     // 在导入过程中的 SELECT ... WHERE IN (...) 查询中，
     // 将分块大小设为 50 以确保绝对安全且不影响效率。
     const BATCH_SIZE = 50;
-    let didMutate = false;
 
     // --- Category Processing ---
     const oldCatIdToNewCatIdMap = new Map(); // Maps JSON ID -> DB ID
+    const privateCategoryIdsToPropagate = new Set();
+    const normalizedImportCategoryNames = new Map();
     let categoryNameToIdMap = new Map(); // For legacy format mapping
     
     // 1. Fetch all existing categories from DB
@@ -75,15 +136,17 @@ export async function onRequestPost(context) {
     if (isNewFormat) {
         // Validate all categories first
         for (const cat of categoriesToImport) {
-            if (!cat.catelog || !(cat.catelog.trim())) {
-                return errorResponse("导入失败：分类数据中存在无效条目，缺少 'catelog' 名称。", 400);
+            const categoryNameResult = normalizeCategoryName(cat.catelog);
+            if (!categoryNameResult.ok) {
+                return errorResponse(`导入失败：${categoryNameResult.message}`, 400);
             }
+            normalizedImportCategoryNames.set(cat, categoryNameResult.value);
         }
 
         // Sort categories to ensure parents are processed before children (Topological Sort)
         let sortedCats = [];
         let remaining = [...categoriesToImport];
-        let processedJsonIds = new Set([0, '0']);
+        let processedJsonIds = new Set(['0']);
         
         let lastRemainingCount = -1;
         while(remaining.length > 0) {
@@ -94,7 +157,7 @@ export async function onRequestPost(context) {
             lastRemainingCount = remaining.length;
             
             const [ready, notReady] = remaining.reduce((acc, cat) => {
-                const pid = cat.parent_id || 0;
+                const pid = getImportParentIdKey(cat.parent_id);
                 if (processedJsonIds.has(pid)) {
                     acc[0].push(cat);
                 } else {
@@ -104,46 +167,87 @@ export async function onRequestPost(context) {
             }, [[], []]);
             
             ready.sort((a, b) => (a.id || 0) - (b.id || 0));
-            ready.forEach(cat => processedJsonIds.add(cat.id));
+            ready.forEach(cat => processedJsonIds.add(getImportIdKey(cat.id)));
             sortedCats.push(...ready);
             remaining = notReady;
         }
         categoriesToImport = sortedCats;
 
         for (const cat of categoriesToImport) {
-            const catName = (cat.catelog || '').trim();
-            const jsonParentId = cat.parent_id || 0;
-            const isPrivate = cat.is_private ? 1 : 0; // Import privacy setting
+            const catName = normalizedImportCategoryNames.get(cat);
+            const jsonParentIdKey = getImportParentIdKey(cat.parent_id);
+            const importedIsPrivate = cat.is_private ? 1 : 0; // Import privacy setting
             
             let dbParentId = 0;
-            if (jsonParentId !== 0) {
-                if (oldCatIdToNewCatIdMap.has(jsonParentId)) {
-                    dbParentId = oldCatIdToNewCatIdMap.get(jsonParentId);
+            if (jsonParentIdKey !== '0') {
+                if (oldCatIdToNewCatIdMap.has(jsonParentIdKey)) {
+                    dbParentId = oldCatIdToNewCatIdMap.get(jsonParentIdKey);
                 } else {
                     dbParentId = 0;
                 }
             }
 
+            const parentCategory = dbParentId
+                ? existingDbCategories.find(c => String(c.id) === String(dbParentId))
+                : null;
+            const isPrivate = parentCategory?.is_private === 1 ? 1 : importedIsPrivate;
             const existing = findExistingCategory(catName, dbParentId);
             
             if (existing) {
-                oldCatIdToNewCatIdMap.set(cat.id, existing.id);
+                if (isPrivate === 1 && existing.is_private !== 1) {
+                    existing.is_private = 1;
+                    privateCategoryIdsToPropagate.add(existing.id);
+                }
+                oldCatIdToNewCatIdMap.set(getImportIdKey(cat.id), existing.id);
             } else {
                 const sortOrder = normalizeSortOrder(cat.sort_order);
+                dbMayHaveChanged = true;
                 const result = await db.prepare('INSERT INTO category (catelog, sort_order, parent_id, is_private) VALUES (?, ?, ?, ?)')
                                        .bind(catName, sortOrder, dbParentId, isPrivate)
                                        .run();
                 let newId = result.meta.last_row_id;
-                didMutate = true;
                 
                 const newCatObj = { id: newId, catelog: catName, parent_id: dbParentId, is_private: isPrivate };
-                if (!existingDbCategories) {
-                     // existingDbCategories = [newCatObj]; 
-                } else {
-                    existingDbCategories.push(newCatObj);
-                }
+                existingDbCategories.push(newCatObj);
                 
-                oldCatIdToNewCatIdMap.set(cat.id, newId);
+                oldCatIdToNewCatIdMap.set(getImportIdKey(cat.id), newId);
+            }
+        }
+
+        if (privateCategoryIdsToPropagate.size > 0) {
+            const privateStatements = [];
+            privateCategoryIdsToPropagate.forEach(categoryId => {
+                privateStatements.push(...buildPrivateDescendantStatements(db, categoryId));
+            });
+            dbMayHaveChanged = true;
+            await db.batch(privateStatements);
+        }
+
+        const hasRootSites = sitesToImport.some(site => getImportIdKey(site.catelog_id) === '0');
+        if (hasRootSites) {
+            const rootCategoryNameResult = normalizeCategoryName(ROOT_IMPORT_CATEGORY_NAME);
+            if (!rootCategoryNameResult.ok) {
+                return errorResponse(`导入失败：${rootCategoryNameResult.message}`, 400);
+            }
+
+            const rootCategoryName = rootCategoryNameResult.value;
+            const existingRootCategory = findExistingCategory(rootCategoryName, 0);
+
+            if (existingRootCategory) {
+                oldCatIdToNewCatIdMap.set('0', existingRootCategory.id);
+            } else {
+                dbMayHaveChanged = true;
+                const result = await db.prepare('INSERT INTO category (catelog, sort_order, parent_id, is_private) VALUES (?, ?, ?, ?)')
+                    .bind(rootCategoryName, 9999, 0, 0)
+                    .run();
+                const newRootCategoryId = result.meta.last_row_id;
+                existingDbCategories.push({
+                    id: newRootCategoryId,
+                    catelog: rootCategoryName,
+                    parent_id: 0,
+                    is_private: 0,
+                });
+                oldCatIdToNewCatIdMap.set('0', newRootCategoryId);
             }
         }
     } else {
@@ -151,14 +255,17 @@ export async function onRequestPost(context) {
              existingDbCategories.forEach(c => categoryNameToIdMap.set(c.catelog, c.id));
         }
         const defaultCategory = 'Default';
-        const categoryNames = [...new Set(sitesToImport.map(item => (item.catelog || defaultCategory).trim()))].filter(name => name);
+        const categoryNames = [...new Set(sitesToImport.map(item => {
+            const categoryNameResult = normalizeCategoryName(item.catelog || defaultCategory);
+            return categoryNameResult.ok ? categoryNameResult.value : '';
+        }))].filter(name => name);
         const newCategoryNames = categoryNames.filter(name => !categoryNameToIdMap.has(name));
 
         if (newCategoryNames.length > 0) {
             // Legacy import doesn't have is_private info, defaults to 0
             const insertStmts = newCategoryNames.map(name => db.prepare('INSERT INTO category (catelog, is_private) VALUES (?, 0)').bind(name));
+            dbMayHaveChanged = true;
             await db.batch(insertStmts);
-            didMutate = true;
             
             for (let i = 0; i < newCategoryNames.length; i += BATCH_SIZE) {
                 const chunk = newCategoryNames.slice(i, i + BATCH_SIZE);
@@ -176,8 +283,8 @@ export async function onRequestPost(context) {
 
     // --- Site Processing ---
     const siteUrls = [...new Set(sitesToImport.flatMap(item => {
-        const rawUrl = (item.url || '').trim();
-        return getUrlMatchCandidates(rawUrl);
+        const urlResult = normalizeBookmarkUrl(item.url);
+        return urlResult.ok ? getUrlMatchCandidates(urlResult.value) : [];
     }))];
     const existingSiteUrlMap = new Map();
     if (siteUrls.length > 0) {
@@ -200,13 +307,29 @@ export async function onRequestPost(context) {
     let itemsUpdated = 0;
     let itemsSkipped = 0;
     const iconAPI = env.ICON_API || 'https://faviconsnap.com/api/favicon?url=';
+    const processedUrls = new Set();
 
     for (const site of sitesToImport) {
-        const rawUrl = (site.url || '').trim();
-        const sanitizedUrl = normalizeUrlForStorage(rawUrl);
-        const sanitizedName = (site.name || '').trim();
+        const nameResult = normalizeBookmarkName(site.name);
+        const urlResult = normalizeBookmarkUrl(site.url);
+        const logoResult = normalizeBookmarkLogo(site.logo);
+        const descResult = normalizeBookmarkDesc(site.desc, { nullIfEmpty: true });
 
-        if (!rawUrl || !sanitizedUrl || !sanitizedName) {
+        if (!nameResult.ok || !urlResult.ok || !logoResult.ok || !descResult.ok) {
+            itemsSkipped++;
+            continue;
+        }
+
+        const rawUrl = urlResult.value;
+        const sanitizedUrl = normalizeUrlForStorage(rawUrl);
+        const dedupKey = sanitizedUrl.endsWith('/') ? sanitizedUrl.slice(0, -1) : sanitizedUrl;
+        const sanitizedName = nameResult.value;
+
+        if (!sanitizedUrl) {
+            itemsSkipped++;
+            continue;
+        }
+        if (processedUrls.has(dedupKey)) {
             itemsSkipped++;
             continue;
         }
@@ -229,14 +352,19 @@ export async function onRequestPost(context) {
         let catIsPrivate = 0;
 
         if (isNewFormat) {
-            newCatId = oldCatIdToNewCatIdMap.get(site.catelog_id);
-            const catObj = existingDbCategories.find(c => c.id === newCatId);
+            newCatId = oldCatIdToNewCatIdMap.get(getImportIdKey(site.catelog_id));
+            const catObj = existingDbCategories.find(c => String(c.id) === String(newCatId));
             if (catObj) {
                 catNameForDb = catObj.catelog;
                 catIsPrivate = catObj.is_private || 0;
             }
         } else {
-            const catName = (site.catelog || 'Default').trim();
+            const catNameResult = normalizeCategoryName(site.catelog || 'Default');
+            if (!catNameResult.ok) {
+                itemsSkipped++;
+                continue;
+            }
+            const catName = catNameResult.value;
             newCatId = categoryNameToIdMap.get(catName);
             catNameForDb = catName;
             const catObj = existingDbCategories.find(c => c.id === newCatId);
@@ -250,15 +378,19 @@ export async function onRequestPost(context) {
             continue;
         }
 
-        let sanitizedLogo = (site.logo || '').trim();
+        let sanitizedLogo = logoResult.value;
         if ((!sanitizedLogo || sanitizedLogo.startsWith('data:image')) && sanitizedUrl.startsWith('http')) {
             const domain = sanitizedUrl.replace(/^https?:\/\//, '').split('/')[0];
             sanitizedLogo = `${iconAPI}${domain}`;
         }
         if (!sanitizedLogo) sanitizedLogo = null;
 
-        const sanitizedDesc = (site.desc || '').trim() || null;
+        const sanitizedDesc = descResult.value;
         const sortOrderValue = normalizeSortOrder(site.sort_order);
+        // 覆盖更新时，若导入数据未提供排序值，则保留已有书签的排序值
+        const sortOrderUpdate = (site.sort_order === undefined || site.sort_order === null)
+            ? null
+            : sortOrderValue;
         
         // Handle Privacy Logic
         let finalIsPrivate = site.is_private ? 1 : 0;
@@ -268,13 +400,15 @@ export async function onRequestPost(context) {
         }
 
         if (exists && override) {
+            processedUrls.add(dedupKey);
             // Update
             batchStmts.push(
-                db.prepare('UPDATE sites SET name=?, logo=?, desc=?, catelog_id=?, catelog_name=?, sort_order=?, is_private=?, update_time=CURRENT_TIMESTAMP WHERE url=?')
-                  .bind(sanitizedName, sanitizedLogo, sanitizedDesc, newCatId, catNameForDb, sortOrderValue, finalIsPrivate, existingDbUrl)
+                db.prepare('UPDATE sites SET name=?, logo=?, desc=?, catelog_id=?, catelog_name=?, sort_order=COALESCE(?, sort_order), is_private=?, update_time=CURRENT_TIMESTAMP WHERE url=?')
+                  .bind(sanitizedName, sanitizedLogo, sanitizedDesc, newCatId, catNameForDb, sortOrderUpdate, finalIsPrivate, existingDbUrl)
             );
             itemsUpdated++;
         } else {
+            processedUrls.add(dedupKey);
             // Insert
             batchStmts.push(
                 db.prepare('INSERT INTO sites (name, url, logo, desc, catelog_id, catelog_name, sort_order, is_private) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
@@ -286,15 +420,11 @@ export async function onRequestPost(context) {
 
     if (batchStmts.length > 0) {
         // Execute in batches to respect D1 limits
+        dbMayHaveChanged = true;
         for (let i = 0; i < batchStmts.length; i += BATCH_SIZE) {
             const chunk = batchStmts.slice(i, i + BATCH_SIZE);
             await db.batch(chunk);
         }
-        didMutate = true;
-    }
-
-    if (didMutate) {
-        await markHomeCacheDirty(env, 'all');
     }
 
     let msg = `导入完成。`;
@@ -309,5 +439,12 @@ export async function onRequestPost(context) {
 
   } catch (error) {
     return errorResponse(`Failed to import config: ${error.message}`, 500);
+  } finally {
+    // 成功、抛错、早返回三种出口共用这一次打标：
+    // 失败时数据库可能已部分变更，成功时要让写入期间读到中间态的首页渲染失效。
+    // markHomeCacheDirty 内部已吞掉异常，不会掩盖原始错误或影响响应。
+    if (dbMayHaveChanged) {
+      await markHomeCacheDirty(env, 'all');
+    }
   }
 }

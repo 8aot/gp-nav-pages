@@ -1,4 +1,4 @@
-import { isAdminAuthenticated, errorResponse, jsonResponse, clearHomeCache, clearHomeCacheDirty } from '../../_middleware';
+import { isAdminAuthenticated, errorResponse, jsonResponse, clearHomeCache, clearHomeCacheDirty, clearGraphCache } from '../../_middleware';
 
 export async function onRequestPost(context) {
   const { request, env } = context;
@@ -10,6 +10,7 @@ export async function onRequestPost(context) {
   try {
     await clearHomeCache(env, 'all');
     await clearHomeCacheDirty(env, 'all');
+    await clearGraphCache(env);
     const response = jsonResponse({
       code: 200,
       message: '首页缓存已清除'

@@ -19,7 +19,8 @@ async function runIncrementalMigrations(env) {
     env.NAV_DB.prepare('CREATE INDEX IF NOT EXISTS idx_sites_catelog_id ON sites(catelog_id)'),
     env.NAV_DB.prepare('CREATE INDEX IF NOT EXISTS idx_sites_sort_order ON sites(sort_order)'),
     env.NAV_DB.prepare('CREATE INDEX IF NOT EXISTS idx_sites_private_sort ON sites(is_private, sort_order)'),
-    env.NAV_DB.prepare('CREATE INDEX IF NOT EXISTS idx_sites_catelog_name ON sites(catelog_name)')
+    env.NAV_DB.prepare('CREATE INDEX IF NOT EXISTS idx_sites_catelog_name ON sites(catelog_name)'),
+    env.NAV_DB.prepare('CREATE INDEX IF NOT EXISTS idx_sites_url ON sites(url)')
   ]);
 
   const [sitesColumns, categoryColumns, pendingColumns] = await Promise.all([
@@ -49,6 +50,9 @@ async function runIncrementalMigrations(env) {
   }
   if (!categoryCols.has('parent_id')) {
     alterStatements.push(env.NAV_DB.prepare('ALTER TABLE category ADD COLUMN parent_id INTEGER DEFAULT 0'));
+  }
+  if (!categoryCols.has('password_hash')) {
+    alterStatements.push(env.NAV_DB.prepare('ALTER TABLE category ADD COLUMN password_hash TEXT'));
   }
 
   for (const statement of alterStatements) {
